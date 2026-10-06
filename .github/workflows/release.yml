@@ -171,10 +171,18 @@ jobs:
       - name: Put the update on emberlightrp.com
         if: env.CF_TOKEN != '' && env.CF_ACCOUNT != '' && env.CF_NAMESPACE != ''
         run: |
+          # Stray spaces or line breaks pasted with a secret break the address, so strip them.
+          CF_TOKEN=$(printf %s "$CF_TOKEN" | tr -d '[:space:]')
+          CF_ACCOUNT=$(printf %s "$CF_ACCOUNT" | tr -d '[:space:]')
+          CF_NAMESPACE=$(printf %s "$CF_NAMESPACE" | tr -d '[:space:]')
           put() {
-            curl --fail-with-body -sS -X PUT \
+            code=$(curl -sS -o reply.json -w '%{http_code}' -X PUT \
               "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT/storage/kv/namespaces/$CF_NAMESPACE/values/launcher%2F$1" \
-              -H "Authorization: Bearer $CF_TOKEN" --data-binary "@dist/$1" > /dev/null
+              -H "Authorization: Bearer $CF_TOKEN" -H "Content-Type: application/octet-stream" --data-binary "@dist/$1")
+            if [ "$code" != 200 ]; then
+              echo "::error::Cloudflare refused $1 (HTTP $code): $(head -c 600 reply.json)"
+              exit 1
+            fi
             echo "uploaded $1"
           }
           put "Emberlight-Companion_${VERSION}_x64-setup.exe"

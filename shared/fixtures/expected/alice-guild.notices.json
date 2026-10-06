@@ -1,0 +1,60 @@
+{
+  "notices": [
+    {
+      "scope": "3:123",
+      "id": "alice-testrealm:1800000000000",
+      "owner": "alice-testrealm",
+      "author": "Alice-TestRealm",
+      "revision": 1800000000000,
+      "created": 1800000000,
+      "expires": 1800221400,
+      "start": 1800214200,
+      "category": 4,
+      "cancelled": false,
+      "title": "Guild muster",
+      "location": "Goldshire",
+      "body": "Meet at \"The Lantern\" by the north gate.\nBring a torch \\ lantern.\nÉcoute: ø, 火."
+    },
+    {
+      "scope": "3:123",
+      "id": "alice-testrealm:1800000000001",
+      "owner": "alice-testrealm",
+      "author": "Alice-TestRealm",
+      "revision": 1800000040000,
+      "created": 1800000000,
+      "expires": 1800104400,
+      "start": 1800100800,
+      "category": 2,
+      "cancelled": true,
+      "title": "Need leather",
+      "location": "",
+      "body": "Anyone spare some?"
+    },
+    {
+      "scope": "3:123",
+      "id": "bob-testrealm:1800000000000",
+      "owner": "bob-testrealm",
+      "author": "Bob-TestRealm",
+      "revision": 1800000000000,
+      "created": 1800000000,
+      "expires": 1800316800,
+      "start": 1800302400,
+      "category": 3,
+      "cancelled": false,
+      "title": "Tavern evening",
+      "location": "Lion's Pride Inn",
+      "body": "Stories and ale."
+    }
+  ],
+  "replies": [
+    {
+      "scope": "3:123",
+      "noticeId": "alice-testrealm:1800000000000",
+      "respondent": "bob-testrealm",
+      "revision": 1800000040000,
+      "response": "I will join"
+    }
+  ],
+  "skipped": [],
+  "partyScopesIgnored": 0
+}

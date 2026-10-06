@@ -1,0 +1,25 @@
+[package]
+name = "emberlight-sync"
+version = "0.1.0"
+edition = "2024"
+description = "Reads Emberlight SavedVariables and writes the Emberlight_Data addon"
+publish = false
+
+[dependencies]
+anyhow = "1.0.104"
+base64 = "0.23.1"
+clap = { version = "4.6.7", features = ["derive", "env"] }
+ed25519-dalek = "3.0.0"
+getrandom = "0.4.3"
+reqwest = { version = "0.13.5", features = ["blocking", "json"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+sha2 = "0.11.0"
+sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"
+
+[target."cfg(windows)".dependencies]
+winreg = "0.56.0"

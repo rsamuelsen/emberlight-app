@@ -1,0 +1,18 @@
+## Interface: 16001, 120100
+## Title: Emberlight
+## Notes: Guild notices and correspondence.
+## Author: Emberlight
+## Version: 0.8.8
+## IconTexture: Interface\AddOns\Emberlight\Media\Crest
+## AddonCompartmentFunc: Emberlight_OnAddonCompartmentClick
+## SavedVariables: EmberlightDB
+## OptionalDeps: Emberlight_Data
+Core\Bootstrap.lua
+Core\Client.lua
+Core\Guild.lua
+Core\Protocol.lua
+Core\Store.lua
+Core\Sync.lua
+UI\Widgets.lua
+UI\Window.lua
+Core\Startup.lua

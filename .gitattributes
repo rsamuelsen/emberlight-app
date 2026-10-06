@@ -1,0 +1,5 @@
+# Auto detect text files and perform LF normalization
+* text=auto
+
+# Fixtures are compared byte for byte on Windows and macOS.
+shared/fixtures/** text eol=lf

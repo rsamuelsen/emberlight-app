@@ -1,0 +1,200 @@
+name: Release
+
+# Builds Emberlight Companion for Windows and Mac from this repository's code, and publishes it:
+#   - a GitHub release with the installers, the addon zip and their checksums, each with a build
+#     attestation (proof that this workflow built it from this code);
+#   - the same files on emberlightrp.com, where installed apps look for updates.
+# Started by hand only: Actions -> Release -> Run workflow. Free on a public repository.
+#
+# Secrets (Settings -> Secrets and variables -> Actions), set by the guild:
+#   TAURI_SIGNING_PRIVATE_KEY    the app's update key (installed apps only accept updates it signed)
+#   CLOUDFLARE_API_TOKEN         may only edit Workers KV
+#   CLOUDFLARE_ACCOUNT_ID
+#   CLOUDFLARE_KV_NAMESPACE_ID   the store the website serves releases from
+# Secrets are never available to pull requests, and this workflow can't be started by one.
+on:
+  workflow_dispatch:
+    inputs:
+      notes:
+        description: "What changed (members see this when the app offers the update)"
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+
+jobs:
+  windows:
+    name: Windows
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - run: rustup update stable && rustup default stable
+      - name: Read the version (the three places it is written must agree)
+        id: version
+        run: |
+          v=$(node -e '
+            const fs = require("fs");
+            const conf = JSON.parse(fs.readFileSync("launcher/src-tauri/tauri.conf.json", "utf8")).version;
+            const pkg = JSON.parse(fs.readFileSync("launcher/package.json", "utf8")).version;
+            const cargo = /^version\s*=\s*"([^"]+)"/m.exec(fs.readFileSync("launcher/src-tauri/Cargo.toml", "utf8"))?.[1];
+            if (!/^\d+\.\d+\.\d+$/.test(conf) || pkg !== conf || cargo !== conf) {
+              console.error(`Versions disagree: tauri.conf.json ${conf}, package.json ${pkg}, Cargo.toml ${cargo}`);
+              process.exit(1);
+            }
+            console.log(conf);')
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+      - run: npm ci
+        working-directory: launcher
+      - run: npx tauri build --bundles nsis
+        working-directory: launcher
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+      - name: Collect
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          mkdir out
+          src="launcher/src-tauri/target/release/bundle/nsis/Emberlight Companion_${VERSION}_x64-setup.exe"
+          cp "$src" "out/Emberlight-Companion_${VERSION}_x64-setup.exe"
+          cp "$src.sig" "out/Emberlight-Companion_${VERSION}_x64-setup.exe.sig"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: out/
+          retention-days: 7
+
+  mac:
+    name: Mac (preview)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - run: rustup update stable && rustup default stable && rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - run: npm ci
+        working-directory: launcher
+      # One app for Intel and Apple silicon Macs. Signed "ad hoc" (no Apple account): the Mac then
+      # offers "Open Anyway" instead of calling the app damaged.
+      - run: npx tauri build --target universal-apple-darwin --bundles app,dmg --config '{"bundle":{"macOS":{"signingIdentity":"-"}}}'
+        working-directory: launcher
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+      - name: Collect
+        run: |
+          VERSION=$(node -p 'require("./launcher/src-tauri/tauri.conf.json").version')
+          mkdir out
+          bundle="launcher/src-tauri/target/universal-apple-darwin/release/bundle"
+          cp "$bundle/macos/Emberlight Companion.app.tar.gz" "out/Emberlight-Companion_${VERSION}_universal.app.tar.gz"
+          cp "$bundle/macos/Emberlight Companion.app.tar.gz.sig" "out/Emberlight-Companion_${VERSION}_universal.app.tar.gz.sig"
+          cp "$bundle/dmg/Emberlight Companion_${VERSION}_universal.dmg" "out/Emberlight-Companion-Mac.dmg"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac
+          path: out/
+          retention-days: 7
+
+  publish:
+    name: Publish
+    needs: [windows, mac]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      VERSION: ${{ needs.windows.outputs.version }}
+      NOTES: ${{ inputs.notes }}
+      GH_TOKEN: ${{ github.token }}
+      CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CF_ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CF_NAMESPACE: ${{ secrets.CLOUDFLARE_KV_NAMESPACE_ID }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Stop if this version was already released
+        run: |
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            echo "Version $VERSION is already released. Raise the version first." >&2
+            exit 1
+          fi
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Addon zip, update list and checksums
+        run: |
+          zip -qr dist/Emberlight-addon.zip Emberlight -x '*.DS_Store'
+          cp "dist/Emberlight-Companion_${VERSION}_x64-setup.exe" dist/Emberlight-Companion-Setup.exe
+          node -e '
+            const fs = require("fs");
+            const v = process.env.VERSION;
+            const sig = (f) => fs.readFileSync(`dist/${f}.sig`, "utf8").trim();
+            const site = "https://emberlightrp.com/v1/releases/launcher/";
+            const win = `Emberlight-Companion_${v}_x64-setup.exe`;
+            const mac = `Emberlight-Companion_${v}_universal.app.tar.gz`;
+            const latest = {
+              version: v,
+              notes: process.env.NOTES.trim().slice(0, 1000),
+              pub_date: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"),
+              platforms: {
+                "windows-x86_64": { signature: sig(win), url: site + win },
+                "darwin-aarch64": { signature: sig(mac), url: site + mac },
+                "darwin-x86_64": { signature: sig(mac), url: site + mac },
+              },
+            };
+            fs.writeFileSync("dist/latest.json", JSON.stringify(latest, null, 2) + "\n");'
+          (cd dist && sha256sum Emberlight-Companion-Setup.exe Emberlight-Companion-Mac.dmg Emberlight-addon.zip "Emberlight-Companion_${VERSION}_x64-setup.exe" "Emberlight-Companion_${VERSION}_universal.app.tar.gz" > SHA256SUMS.txt)
+          cat dist/SHA256SUMS.txt
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            dist/Emberlight-Companion-Setup.exe
+            dist/Emberlight-Companion-Mac.dmg
+            dist/Emberlight-addon.zip
+            dist/Emberlight-Companion_*_x64-setup.exe
+            dist/Emberlight-Companion_*_universal.app.tar.gz
+      # Installed apps ask emberlightrp.com for updates. Files first, the update list last, so the
+      # list never points at a file that isn't there yet.
+      - name: Put the update on emberlightrp.com
+        if: env.CF_TOKEN != '' && env.CF_ACCOUNT != '' && env.CF_NAMESPACE != ''
+        run: |
+          put() {
+            curl --fail-with-body -sS -X PUT \
+              "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT/storage/kv/namespaces/$CF_NAMESPACE/values/launcher%2F$1" \
+              -H "Authorization: Bearer $CF_TOKEN" --data-binary "@dist/$1" > /dev/null
+            echo "uploaded $1"
+          }
+          put "Emberlight-Companion_${VERSION}_x64-setup.exe"
+          put "Emberlight-Companion_${VERSION}_universal.app.tar.gz"
+          put latest.json
+      - name: Say when the update was not put on emberlightrp.com
+        if: env.CF_TOKEN == '' || env.CF_ACCOUNT == '' || env.CF_NAMESPACE == ''
+        run: echo "::warning::The Cloudflare secrets are not set, so installed apps will not be offered this version."
+      - name: GitHub release
+        run: |
+          addon=$(sed -n 's/^## Version: *//p' Emberlight/Emberlight.toc | tr -d '\r')
+          printf '%s\n\nAddon version %s.\n\n**Download:** [Windows](https://github.com/%s/releases/download/v%s/Emberlight-Companion-Setup.exe) · [Mac (preview)](https://github.com/%s/releases/download/v%s/Emberlight-Companion-Mac.dmg) · [Addon only](https://github.com/%s/releases/download/v%s/Emberlight-addon.zip)\n' \
+            "$NOTES" "$addon" "$GITHUB_REPOSITORY" "$VERSION" "$GITHUB_REPOSITORY" "$VERSION" "$GITHUB_REPOSITORY" "$VERSION" > notes.md
+          gh release create "v$VERSION" --title "Emberlight Companion $VERSION" --notes-file notes.md --target "$GITHUB_SHA" \
+            dist/Emberlight-Companion-Setup.exe \
+            dist/Emberlight-Companion-Mac.dmg \
+            dist/Emberlight-addon.zip \
+            dist/SHA256SUMS.txt \
+            "dist/Emberlight-Companion_${VERSION}_x64-setup.exe" \
+            "dist/Emberlight-Companion_${VERSION}_x64-setup.exe.sig" \
+            "dist/Emberlight-Companion_${VERSION}_universal.app.tar.gz" \
+            "dist/Emberlight-Companion_${VERSION}_universal.app.tar.gz.sig" \
+            dist/latest.json

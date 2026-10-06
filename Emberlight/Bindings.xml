@@ -1,0 +1,5 @@
+<Bindings>
+    <Binding name="EMBERLIGHT_TOGGLE" header="EMBERLIGHT" category="ADDONS">
+        EmberlightToggle()
+    </Binding>
+</Bindings>

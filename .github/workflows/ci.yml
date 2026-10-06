@@ -1,0 +1,41 @@
+name: Tests
+
+# Checks the sync tool and builds the app's window on every change. It never has access to any secret.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    name: Sync tool (Rust)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sync
+    steps:
+      - uses: actions/checkout@v5
+      - run: rustup update stable && rustup default stable && rustup component add clippy
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: cargo test --locked
+
+  app:
+    name: Companion window (TypeScript)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: launcher
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - run: npm ci
+      - run: npm run build

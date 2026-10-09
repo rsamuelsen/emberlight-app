@@ -122,8 +122,9 @@ end
 -- the two answers, and a newer revision than the one already known. A line may come with it.
 function N.ImportReply(scope, id, who, r, now)
     local entry = scope.entries[id]
-    if not entry or entry.cancelled or entry.expires <= now or who == entry.owner then return false end
     if #who > 120 or not who:find("-", 1, true) or who:find("[%s|:]") then return false end
+    who = C.Local(who)
+    if not entry or entry.cancelled or entry.expires <= now or who == entry.owner then return false end
     local rev = whole(r.revision, 1, 999999999999999)
     if not rev or (r.response ~= "I will join" and r.response ~= "Unable to attend") then return false end
     scope.replies[id] = scope.replies[id] or {}
@@ -159,6 +160,8 @@ function N.ImportNotice(scope, id, n, me, now)
     local start = whole(n.start, created - 172800, created + HORIZON + 60)
     if not start or type(n.cancelled) ~= "boolean" then return false end
     if not safe(n.title, 100, true) or not safe(n.location, 100) or not safe(n.body, 1600, true) or not safe(n.author, 120, true) then return false end
+    -- The server's copy names the owner's true realm; this client may know them by another.
+    owner = C.Local(owner)
     local old = scope.entries[id]
     if old and (old.owner ~= owner or old.created ~= created or old.expires ~= expires or old.categoryIndex ~= category or old.start ~= start) then return false end
     if old and (old.revision >= rev or old.cancelled) then return false end
@@ -265,7 +268,7 @@ function N.Post(draft)
         return nil, "That reaches too far ahead. A notice must start and leave the board within three weeks."
     end
     local revision = N.Revision()
-    local entry = { id=me .. ":" .. string.format("%.0f",revision), owner=me, author=roster[me].name,
+    local entry = { id=me .. ":" .. string.format("%.0f",revision), owner=me, author=C.Author(roster, me),
         revision=revision, created=C.Now(), expires=expires, start=start, title=d.title,
         location=d.location, body=d.body, category=E.categories[d.category], categoryIndex=d.category, own=true, live=true }
     local queued, why = N.Queue(N.Fields(entry), "N:" .. entry.id .. ":" .. revision)
@@ -436,7 +439,7 @@ function N.PostSupply(draft)
     end
     if own >= 10 or active >= 50 then return nil, "The supply ledger is full. Close older requests first." end
     local revision = N.Revision()
-    local project = { id=me..":"..string.format("%.0f",revision), owner=me, author=roster[me].name, revision=revision,
+    local project = { id=me..":"..string.format("%.0f",revision), owner=me, author=C.Author(roster, me), revision=revision,
         created=C.Now(), item=item, goal=goal, title=title, location=location, body=body, own=true }
     local queued, why = N.Queue(N.SupplyFields(project), "S:" .. project.id .. ":" .. revision)
     if not queued then return nil, why end
@@ -508,6 +511,13 @@ function N.Refresh()
     C.RequestRoster()
     N.lastHello = C.Now(); N.Snapshot(); return true
 end
+-- Whether a notice or supply id ("<owner>:<number>") was written by this sender. The owner part is
+-- the author's own identity, with their true realm; WoW's sender may carry this client's realm
+-- instead (C.Local), so the two are compared as this client keys them.
+function N.Owns(sender, id)
+    local owner = type(id) == "string" and #id <= 150 and id:match("^(.+):%d+$")
+    return owner and C.Local(owner) == sender or false
+end
 function N.Apply(fields, sender)
     local data, roster, me = N.Context()
     if not data or not roster[sender] or fields[2] ~= N.guild then return false end
@@ -532,7 +542,7 @@ function N.Apply(fields, sender)
         local start = integer(fields[12], C.Now()-HORIZON-14520-172800, C.Now()+HORIZON+60)
         if not rev or not created or not expires or expires <= created or expires-created > HORIZON+14400+120 or not category or not start then return false end
         if start < created-172800 or start > created+HORIZON+60 then return false end
-        if #id > 150 or id:sub(1,#sender+1) ~= sender .. ":" or not id:sub(#sender+2):match("^%d+$") then return false end
+        if not N.Owns(sender, id) then return false end
         if fields[8] ~= "0" and fields[8] ~= "1" then return false end
         if not safe(fields[9],100,true) or not safe(fields[10],100) or not safe(fields[11],1600,true) then return false end
         if category == 4 and not roster[sender].officer then return false end
@@ -591,7 +601,7 @@ function N.Apply(fields, sender)
         local created = integer(fields[5], C.Now()-SUPPLY_DAYS*86400, C.Now()+60)
         local goal = integer(fields[8], 1, 1000000)
         if not rev or not created or not goal then return false end
-        if #id > 150 or id:sub(1,#sender+1) ~= sender .. ":" or not id:sub(#sender+2):match("^%d+$") then return false end
+        if not N.Owns(sender, id) then return false end
         if fields[6] ~= "0" and fields[6] ~= "1" then return false end
         if not safe(fields[9],100,true) or not safe(fields[10],100) or not safe(fields[7],100,true) or not safe(fields[11],800,true) then return false end
         if not roster[sender].officer then return false end
@@ -624,7 +634,7 @@ function N.Apply(fields, sender)
         contributors[sender] = c
         return true
     elseif kind == "C" and #fields == 6 then
-        local project = data.supplies[fields[3]]; local contributor = fields[4]; local rev = integer(fields[5], 1, 999999999999999)
+        local project = data.supplies[fields[3]]; local contributor = C.Local(fields[4]); local rev = integer(fields[5], 1, 999999999999999)
         local confirmed = integer(fields[6], 0, 1000000)
         if not project or not rev or not confirmed or project.owner ~= sender then return false end
         local contributors = data.contributions[project.id]

@@ -633,7 +633,11 @@ function U.ShowEntry(entry)
     local joining, unable = answers(entry)
     U.whoHead:SetText(#joining == 0 and #unable == 0 and "No answers yet"
         or "Who is joining (" .. #joining .. ")" .. (#unable > 0 and (" / " .. #unable .. " unable") or ""))
-    U.whoNames:SetText(table.concat(joining, ", "))
+    -- Those who cannot come are named too, after those joining (9 October: an "Unable" answer
+    -- showed only as a count, so members thought it had not arrived).
+    local names = table.concat(joining, ", ")
+    if #unable > 0 then names = names .. (names ~= "" and "\n" or "") .. "Unable: " .. table.concat(unable, ", ") end
+    U.whoNames:SetText(names)
     U.readerState:SetText(state(entry))
     local open = not entry.cancelled and entry.expires > E.Client.Now()
     local canAnswer = open and not entry.own
@@ -710,6 +714,9 @@ function U.CreateWriter()
     U.bodyScroll:SetScrollChild(body)
     U.bodyScroll:HookScript("OnScrollRangeChanged", function(self) U.UpdateScroll(self) end)
     U.bodyScroll:HookScript("OnShow", function(self) U.UpdateScroll(self) end)
+    -- An empty message box is one line high: a click anywhere in the panel starts writing.
+    U.bodyScroll:EnableMouse(true)
+    U.bodyScroll:SetScript("OnMouseDown", function() body:SetFocus(); body:SetCursorPosition(#body:GetText()) end)
     body:SetFont(STANDARD_TEXT_FONT, U.TextSize(), "")
     U.reading[#U.reading + 1] = function(size) body:SetFont(STANDARD_TEXT_FONT, size, "") end
     for key, field in pairs(U.fields) do

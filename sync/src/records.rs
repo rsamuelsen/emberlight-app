@@ -402,11 +402,24 @@ fn removal_from(n: &Notice, t: &Table) -> Option<Removal> {
     (valid_owner(moderator) && moderator != n.owner).then(|| Removal { scope: n.scope.clone(), id: n.id.clone(), moderator: moderator.to_owned() })
 }
 
+/// The name part of an identity, with its "-": `elthiern_hendil-`.
+fn name_of(identity: &str) -> &str {
+    identity.rfind('-').map_or("", |i| &identity[..=i])
+}
+
+/// Whether `identity` is one of these verified characters. WoW: Forever puts characters on hidden
+/// realms of one megarealm ("ClassicBetaPvE", "ClassicBetaPvE2"): the game writes a character's own
+/// hidden realm, the server links it with the guild's realm. Names are unique on the megarealm, so
+/// the same name is the same character, whatever the realm (as the server's `identity.ts`).
+pub fn owns(characters: &[String], identity: &str) -> bool {
+    characters.iter().any(|c| c == identity || (!name_of(c).is_empty() && name_of(c) == name_of(identity)))
+}
+
 /// Removals this member may upload: made by one of their verified characters, in a synced board.
 pub fn select_removal_uploads(removals: impl IntoIterator<Item = Removal>, characters: &[String], scopes: &[String], party: bool) -> Vec<Removal> {
     let mut picked: BTreeMap<(String, String), Removal> = BTreeMap::new();
     for r in removals {
-        if characters.contains(&r.moderator) && scope_synced(&r.scope, scopes, party) {
+        if owns(characters, &r.moderator) && scope_synced(&r.scope, scopes, party) {
             picked.entry((r.scope.clone(), r.id.clone())).or_insert(r);
         }
     }
@@ -468,7 +481,7 @@ fn export_replies(db: &Table, notices: &[Notice], skipped: &mut Vec<Skipped>) ->
 pub fn select_reply_uploads(replies: impl IntoIterator<Item = Reply>, characters: &[String], scopes: &[String], party: bool) -> Vec<Reply> {
     let mut best: BTreeMap<(String, String, String), Reply> = BTreeMap::new();
     for r in replies {
-        if !characters.contains(&r.respondent) || !scope_synced(&r.scope, scopes, party) {
+        if !owns(characters, &r.respondent) || !scope_synced(&r.scope, scopes, party) {
             continue;
         }
         let key = (r.scope.clone(), r.notice_id.clone(), r.respondent.clone());
@@ -525,7 +538,7 @@ pub fn local_characters(globals: &BTreeMap<String, Value>) -> Vec<String> {
 pub fn select_uploads(exports: impl IntoIterator<Item = Notice>, characters: &[String], scopes: &[String], party: bool) -> Vec<Notice> {
     let mut best: BTreeMap<(String, String), Notice> = BTreeMap::new();
     for n in exports {
-        if !characters.contains(&n.owner) || !scope_synced(&n.scope, scopes, party) {
+        if !owns(characters, &n.owner) || !scope_synced(&n.scope, scopes, party) {
             continue;
         }
         let key = (n.scope.clone(), n.id.clone());
@@ -539,6 +552,19 @@ pub fn select_uploads(exports: impl IntoIterator<Item = Notice>, characters: &[S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hidden_realms_are_the_same_character() {
+        let linked = ["elthiern_hendil-classicbetapve2".to_string()];
+        assert!(owns(&linked, "elthiern_hendil-classicbetapve"));
+        assert!(owns(&linked, "elthiern_hendil-classicbetapve2"));
+        assert!(!owns(&linked, "nora_everwood-classicbetapve2"));
+        assert!(!owns(&linked, "elthiern"));
+        let mut n = sample();
+        n.id = "alice-otherrealm:1800000000000".into();
+        n.owner = "alice-otherrealm".into();
+        assert_eq!(select_uploads([n.clone()], &["alice-testrealm".into()], &["3:123".into()], false), vec![n]);
+    }
 
     #[test]
     fn upload_selection() {

@@ -2,7 +2,7 @@
 ## Title: Emberlight
 ## Notes: Guild notices and correspondence.
 ## Author: Emberlight
-## Version: 0.8.8
+## Version: 0.8.9
 ## IconTexture: Interface\AddOns\Emberlight\Media\Crest
 ## AddonCompartmentFunc: Emberlight_OnAddonCompartmentClick
 ## SavedVariables: EmberlightDB

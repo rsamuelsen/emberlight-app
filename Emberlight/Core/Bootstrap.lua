@@ -1,5 +1,5 @@
 local _, E = ...
-E.version = "0.8.8"
+E.version = "0.8.9"
 -- What members read for each kind of notice. Only the number travels between players and to the
 -- server, so these words can change without touching the protocol. 1 to 3 are adventures.
 E.categories = { "Journey", "Call for aid", "Gathering", "Guild event" }

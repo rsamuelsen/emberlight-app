@@ -48,7 +48,7 @@ function C.Roster()
     if C.Channel() == "PARTY" then local _, roster = C.Party(); return roster or {} end
     local guild = C.ScopeKey()
     if C.rosterCache and C.rosterGuild == guild and C.rosterUntil > C.Now() then return C.rosterCache end
-    local members = {}
+    local members, names = {}, {}
     if not guild or not GetNumGuildMembers or not GetGuildRosterInfo then return members end
     for i = 1, GetNumGuildMembers() do
         -- Do not retain public/officer notes, or any other guild records.
@@ -56,10 +56,34 @@ function C.Roster()
         local key = C.Canonical(name)
         if key and type(index) == "number" then
             members[key] = { name = name, officer = index == 0 or rank == "Flame Keeper", rank = rank }
+            -- A roster name without a realm: C.Local finds this member by name alone.
+            if not name:find("-", 1, true) then names[key:match("^[^-]+")] = key end
         end
     end
-    C.rosterCache = members; C.rosterGuild = guild; C.rosterUntil = C.Now() + 2
+    C.rosterCache = members; C.rosterNames = names; C.rosterGuild = guild; C.rosterUntil = C.Now() + 2
     return members
+end
+-- WoW: Forever is one megarealm split into hidden realms ("ClassicBetaPvE", "ClassicBetaPvE2")
+-- that nobody chooses. The guild roster and addon messages name members without a realm, and
+-- C.Canonical fills in the reader's own, so a member on the other hidden realm is known here by the
+-- wrong realm, while what they write themselves (notice ids, the server's copies) carries their
+-- true one. Names are unique on the megarealm, so an identity whose name matches a roster member
+-- the roster gave no realm is that member. Returns the identity as this client keys it: its roster
+-- key. Anything else (a realm the roster names, someone not in the guild) is returned unchanged.
+function C.Local(identity)
+    if type(identity) ~= "string" or C.Channel() ~= "GUILD" then return identity end
+    local roster = C.Roster()
+    if roster[identity] or C.rosterCache ~= roster or not C.rosterNames then return identity end
+    local name = identity:match("^([^-]+)%-")
+    return name and C.rosterNames[name] or identity
+end
+-- The name a record of this player's own carries as its author: the roster's name, with this
+-- player's realm when the roster gives none, so that it matches the owner (the sync tool and the
+-- server refuse a notice whose author is not its owner's name).
+function C.Author(roster, me)
+    local name = roster[me] and roster[me].name or C.Name()
+    if not name:find("-", 1, true) then name = name .. "-" .. (GetNormalizedRealmName and GetNormalizedRealmName() or GetRealmName()) end
+    return name
 end
 function C.RequestRoster()
     C.rosterCache = nil

@@ -26,7 +26,9 @@ function U.Surface(parent, file)
     return texture
 end
 
-function U.Author(value, limit) return E.Clean(value, limit) end
+-- A notice's author as members read it: the name without its realm, which on WoW: Forever is a
+-- hidden part of the megarealm (a member's own notices, and the server's copies, carry it).
+function U.Author(value, limit) return (E.Clean(value, 120):match("^[^-]*")):sub(1, limit) end
 
 function U.Rule(parent, x, y, width, color)
     local rule = parent:CreateTexture(nil, "ARTWORK")
@@ -241,6 +243,10 @@ function U.Field(parent, label, x, y, width, height, max, multiline)
     edit:SetMultiLine(multiline or false)
     edit:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
     if not multiline then edit:SetScript("OnEnterPressed", function(self) self:ClearFocus() end) end
+    -- A click anywhere in the panel starts writing, not only on the text itself (a multi-line box
+    -- is as high as its text, one line while empty).
+    surround:EnableMouse(true)
+    surround:SetScript("OnMouseDown", function() edit:SetFocus(); edit:SetCursorPosition(#edit:GetText()) end)
     return edit
 end
 -- Reading text: the long, scrolling text of a notice. Its size is the member's choice in Settings.

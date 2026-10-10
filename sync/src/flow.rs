@@ -18,6 +18,8 @@ pub struct PushReport {
     pub stored: usize,
     pub unchanged: usize,
     pub expired: usize,
+    /// Guild boards with this member's own records that the server does not sync (not uploaded).
+    pub unsynced: Vec<String>,
     /// Why records were refused, or files could not be read. Written for members.
     pub problems: Vec<String>,
 }
@@ -53,6 +55,7 @@ pub fn push(client: &Client, files: &[PathBuf], now: i64) -> Result<PushReport> 
             Err(e) => report.problems.push(format!("Could not read {}: {e:#}", file.display())),
         }
     }
+    report.unsynced = records::unsynced_boards(&notices, &replies, &characters, &me.scopes);
     let notices = records::select_uploads(notices, &characters, &me.scopes, me.party_scopes);
     let replies = records::select_reply_uploads(replies, &characters, &me.scopes, me.party_scopes);
     let removals = records::select_removal_uploads(removals, &characters, &me.scopes, me.party_scopes);

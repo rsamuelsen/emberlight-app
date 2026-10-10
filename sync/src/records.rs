@@ -415,6 +415,18 @@ pub fn owns(characters: &[String], identity: &str) -> bool {
     characters.iter().any(|c| c == identity || (!name_of(c).is_empty() && name_of(c) == name_of(identity)))
 }
 
+/// Guild boards holding this member's own notices or answers that the server does not sync, so
+/// nothing in them is uploaded. The beta renumbered its region once (`90:` became `110:` for the
+/// same guild); naming such a board lets the member tell an officer instead of syncing in silence.
+pub fn unsynced_boards<'a>(notices: impl IntoIterator<Item = &'a Notice>, replies: impl IntoIterator<Item = &'a Reply>, characters: &[String], scopes: &[String]) -> Vec<String> {
+    let own = notices.into_iter().filter(|n| owns(characters, &n.owner)).map(|n| &n.scope);
+    let answered = replies.into_iter().filter(|r| owns(characters, &r.respondent)).map(|r| &r.scope);
+    let mut boards: Vec<String> = own.chain(answered).filter(|s| !is_party_scope(s) && !scopes.contains(s)).cloned().collect();
+    boards.sort();
+    boards.dedup();
+    boards
+}
+
 /// Removals this member may upload: made by one of their verified characters, in a synced board.
 pub fn select_removal_uploads(removals: impl IntoIterator<Item = Removal>, characters: &[String], scopes: &[String], party: bool) -> Vec<Removal> {
     let mut picked: BTreeMap<(String, String), Removal> = BTreeMap::new();
@@ -552,6 +564,20 @@ pub fn select_uploads(exports: impl IntoIterator<Item = Notice>, characters: &[S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn own_records_in_an_unsynced_guild_are_named() {
+        let mut n = sample();
+        n.scope = "110:123".into();
+        let mut other = sample();
+        other.scope = "110:999".into();
+        other.id = "bob-testrealm:1800000000000".into();
+        other.owner = "bob-testrealm".into();
+        let synced = sample();
+        let me = ["alice-testrealm".to_string()];
+        assert_eq!(unsynced_boards([&n, &other, &synced], [], &me, &["3:123".into()]), vec!["110:123".to_string()]);
+        assert!(unsynced_boards([&synced], [], &me, &["3:123".into()]).is_empty());
+    }
 
     #[test]
     fn hidden_realms_are_the_same_character() {

@@ -120,9 +120,16 @@ fn sync_inner(settings: &Settings, token: &str, report: &mut SyncReport) -> Resu
     report.uploaded = pushed.notices + pushed.replies + pushed.removals;
     report.stored = pushed.stored;
     report.rejected = pushed.problems;
+    // Own events in a guild the website does not sync are never uploaded: say so, or the sync
+    // looks fine while nothing arrives (the beta once renumbered the guild's region).
+    let unsynced = (!pushed.unsynced.is_empty()).then(|| {
+        format!("Your events were not sent: the website does not sync this guild yet ({}). Please tell an officer.", pushed.unsynced.join(", "))
+    });
+    report.note = unsynced.clone();
 
     if !wow::running_clients(Some(&root)).is_empty() {
-        report.note = Some("World of Warcraft is running. New notices will be added after it closes.".into());
+        let running = "World of Warcraft is running. New notices will be added after it closes.";
+        report.note = Some(unsynced.map_or(running.to_owned(), |u| format!("{u} {running}")));
         return Ok(());
     }
     // The game can be started from Battle.net while this downloads: check again before writing.

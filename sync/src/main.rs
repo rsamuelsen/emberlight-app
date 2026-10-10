@@ -185,6 +185,9 @@ fn main() -> Result<()> {
             for p in &r.problems {
                 eprintln!("{p}");
             }
+            for b in &r.unsynced {
+                eprintln!("Not uploaded: the server does not sync the guild board {b}. Tell an officer.");
+            }
             println!(
                 "Uploaded {} notice(s), {} reply(ies) and {} officer removal(s): {} stored, {} already current, {} expired, {} not accepted",
                 r.notices,

@@ -1,3 +1,5 @@
+#[cfg(any(target_os = "macos", test))]
+mod battle_net_macos;
 mod game;
 mod store;
 
@@ -7,7 +9,7 @@ use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use store::{AddonCheck, Saved, Settings, SyncReport};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -18,9 +20,8 @@ use tauri_plugin_updater::UpdaterExt;
 struct AppState {
     path: PathBuf,
     saved: Mutex<Saved>,
+    /// True only after the process monitor observes a running WoW client.
     watching: AtomicBool,
-    /// When Play was last pressed, until the game is seen running.
-    launched: Mutex<Option<Instant>>,
     signing_in: AtomicBool,
     cancel_sign_in: AtomicBool,
     updating_addon: AtomicBool,
@@ -444,12 +445,9 @@ async fn play(app: AppHandle) -> Result<Overview, String> {
         }
         record_sync(app);
         game::launch(&settings)?;
-        if let Some(window) = app.get_webview_window("main") {
-            let _ = window.hide();
-        }
-        let state = app.state::<AppState>();
-        *state.launched.lock().expect("launch lock") = Some(Instant::now());
-        state.watching.store(true, Ordering::SeqCst);
+        // Opening Battle.net is not proof that WoW started: it may need an update,
+        // and the beta requires another Play click there. Keep this window available
+        // for retries; only the process monitor may mark the game as running.
         Ok(overview_now(app))
     })
     .await
@@ -471,37 +469,61 @@ fn close_window(app: AppHandle) {
 
 /// Watch for the game for as long as the app is open, however it was started (Play here, or
 /// Battle.net directly). When it starts or closes the window is told, and when it closes what it
-/// saved is synced. After Play, the game gets ten minutes to appear.
+/// saved is synced. Opening Battle.net does not create a game session.
 fn monitor_game(app: AppHandle) {
     std::thread::spawn(move || {
         let mut clients = wow::Clients::new();
-        let mut seen = false;
         loop {
             std::thread::sleep(Duration::from_secs(3));
             let state = app.state::<AppState>();
             let running = !clients.running(game::root(&state.settings()).ok().as_deref()).is_empty();
-            if running == seen {
-                let mut launched = state.launched.lock().expect("launch lock");
-                let waiting = launched.is_some_and(|at| at.elapsed() <= Duration::from_secs(600));
-                if !running && !waiting && state.watching.swap(false, Ordering::SeqCst) {
-                    *launched = None;
-                    let _ = app.emit("overview-changed", ());
-                }
+            if !update_game_session(&state.watching, running) {
                 continue;
             }
-            seen = running;
-            if running {
-                *state.launched.lock().expect("launch lock") = None;
-                state.watching.store(true, Ordering::SeqCst);
-            } else {
+            if !running {
                 // WoW writes SavedVariables before it exits; give the file system a moment.
                 std::thread::sleep(Duration::from_secs(2));
                 record_sync(&app);
-                state.watching.store(false, Ordering::SeqCst);
             }
             let _ = app.emit("overview-changed", ());
         }
     });
+}
+
+/// A launch request is deliberately not an input: only observed client processes
+/// can start/end a session. Return whether the UI needs a change notification.
+fn update_game_session(watching: &AtomicBool, running: bool) -> bool {
+    watching.swap(running, Ordering::SeqCst) != running
+}
+
+#[cfg(test)]
+mod session_tests {
+    use super::*;
+
+    #[test]
+    fn battle_net_without_wow_never_enters_a_session() {
+        let watching = AtomicBool::new(false);
+        // Battle.net may update, remain open indefinitely, or require another Play.
+        // Repeated monitor samples must leave Play available without restarting.
+        for _ in 0..250 {
+            assert!(!update_game_session(&watching, false));
+            assert!(!watching.load(Ordering::SeqCst));
+        }
+    }
+
+    #[test]
+    fn only_actual_client_start_and_exit_change_the_session() {
+        let watching = AtomicBool::new(false);
+        assert!(!update_game_session(&watching, false));
+        assert!(update_game_session(&watching, true));
+        assert!(watching.load(Ordering::SeqCst));
+        assert!(!update_game_session(&watching, true));
+        assert!(update_game_session(&watching, false));
+        assert!(!watching.load(Ordering::SeqCst));
+        assert!(!update_game_session(&watching, false));
+        // A later attempt can start normally; no stuck launch state remains.
+        assert!(update_game_session(&watching, true));
+    }
 }
 
 fn show_window(app: &AppHandle) {
@@ -535,7 +557,6 @@ pub fn run() {
                 path,
                 saved: Mutex::new(saved),
                 watching: AtomicBool::new(false),
-                launched: Mutex::new(None),
                 signing_in: AtomicBool::new(false),
                 cancel_sign_in: AtomicBool::new(false),
                 updating_addon: AtomicBool::new(false),

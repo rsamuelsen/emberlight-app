@@ -35,6 +35,21 @@ The same four steps as on Windows: the World of Warcraft folder (usually found b
 The Mac may ask whether Emberlight Companion may use your keychain (where it keeps your sign-in).
 Click **Always Allow**.
 
+## If Play cannot open Battle.net
+
+Emberlight checks for `Battle.net.app` in `/Applications` and your own `~/Applications`,
+both directly and inside a `Battle.net` subfolder. It also asks macOS to find Battle.net by
+name, so registered installations in other locations can work.
+
+If Play reports an error, check that Battle.net opens from Finder. For a custom installation,
+open it once from Finder so macOS can register it, then retry Play. The error includes macOS's
+diagnostic details if opening still fails; you can start the game directly from Battle.net in
+the meantime. For the Forever beta, Emberlight opens Battle.net on the beta; press Play there.
+
+Opening Battle.net does not mean WoW has started. Emberlight keeps its window available and
+only shows **In game** once it detects the WoW client. If Battle.net needs to update WoW,
+finish the update and press Play in Battle.net; Emberlight will detect the game when it starts.
+
 ## Removing it
 
 Quit it from the menu bar icon, then drag **Emberlight Companion** from Applications to the Bin.

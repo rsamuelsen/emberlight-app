@@ -172,7 +172,8 @@ export async function handle(cmd: string, args?: Record<string, unknown>): Promi
       throw "Preview only: the real app restarts into the new version here.";
     case "play":
       await wait(2000);
-      state = { ...state, watching: true };
+      // Handing off to Battle.net does not confirm a running game. Use the
+      // ingame preview to model an actually detected client.
       return state;
     case "save_settings":
       state = { ...state, settings: { ...state.settings, wowRoot: (args?.wowRoot as string) ?? null, flavor: args?.flavor as string, server: args?.server as string } };

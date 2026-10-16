@@ -7,7 +7,7 @@ use crate::store::{Settings, SyncReport};
 use emberlight_sync::{api, datafile, flow, lua, paths, records, update, wow};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(windows)]
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -267,11 +267,7 @@ fn launch_battle_net(argument: &str) -> Result<(), String> {
 
 #[cfg(target_os = "macos")]
 fn launch_battle_net(argument: &str) -> Result<(), String> {
-    Command::new("open")
-        .args(["-a", "Battle.net", "--args", &argument.replace('"', "")])
-        .status()
-        .map_err(|e| format!("Could not start Battle.net ({e})."))
-        .and_then(|s| if s.success() { Ok(()) } else { Err("Battle.net was not found. Start the game from Battle.net.".into()) })
+    crate::battle_net_macos::launch(argument)
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]

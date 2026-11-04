@@ -146,6 +146,8 @@ async fn sign_in(app: AppHandle, token: String) -> Result<Overview, String> {
         state.update(|s| {
             s.settings.member_name = Some(me.name);
             s.settings.discord_id = me.discord_id;
+            // A result from before this sign-in no longer says anything about it.
+            s.last_sync = None;
         })?;
         Ok(overview_now(app))
     })
@@ -181,6 +183,8 @@ async fn sign_in_discord(app: AppHandle) -> Result<Overview, String> {
             state.update(|s| {
                 s.settings.member_name = Some(name);
                 s.settings.discord_id = discord_id;
+                // A result from before this sign-in no longer says anything about it.
+                s.last_sync = None;
             })?;
             Ok(())
         })();
@@ -214,6 +218,7 @@ async fn sign_out(app: AppHandle) -> Result<Overview, String> {
         app.state::<AppState>().update(|s| {
             s.settings.member_name = None;
             s.settings.discord_id = None;
+            s.last_sync = None;
         })?;
         match (cleared, revoked) {
             (Err(e), true) => Err(format!("Signed out, and the server ended the session. {e} Remove \"{}\" from the system's credential manager.", store::KEYCHAIN_SERVICE)),

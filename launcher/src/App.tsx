@@ -165,10 +165,12 @@ export function App() {
   useEffect(() => { if (officialRaw && notificationAccount) void checkNotifications(officialRaw, now, notificationAccount); }, [officialRaw, now, notificationAccount, notificationRevision]);
   const [signingIn, setSigningIn] = useState(false);
   const titleSignIn = async () => {
-    if (signingOut.current) return;
+    if (signingOut.current) return false;
     setSigningIn(true); setProblem(null);
-    try { setOverview(await api.signInDiscord()); } catch (e) { setProblem(message(e)); } finally { setSigningIn(false); }
+    try { setOverview(await api.signInDiscord()); return true; } catch (e) { setProblem(message(e)); return false; } finally { setSigningIn(false); }
   };
+  // "Sign in again" after a failed sync: sign in, then sync at once, so the member sees a fresh result.
+  const signInAndSync = async () => { if (await titleSignIn()) await act("sync", api.syncNow); };
   const titleSignOut = async () => {
     signingOut.current = true; authEpoch.current++;
     clearReminderSession(); setSelectedEvent(null);
@@ -433,7 +435,7 @@ export function App() {
             {problem && <details className="status-details is-problem" open><summary>Action failed</summary><p role="alert" tabIndex={0}>{problem}</p></details>}
             {signedIn && (
               <p className="status-actions">
-                <button className="link" disabled={!!busy} onClick={() => lastSync?.error || lastSync?.rejected.length ? recovery === "signin" ? titleSignIn() : recovery === "characters" ? setPage("characters") : act("sync", api.syncNow) : act("sync", api.syncNow)}>
+                <button className="link" disabled={!!busy} onClick={() => lastSync?.error || lastSync?.rejected.length ? recovery === "signin" ? signInAndSync() : recovery === "characters" ? setPage("characters") : act("sync", api.syncNow) : act("sync", api.syncNow)}>
                   {lastSync?.error || lastSync?.rejected.length ? recovery === "signin" ? "Sign in again" : recovery === "characters" ? "Check your characters" : "Try again" : "Sync now"}
                 </button>
               </p>

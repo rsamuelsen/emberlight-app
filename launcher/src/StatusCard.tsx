@@ -1,4 +1,5 @@
-import type { Claim, LauncherUpdate, Overview } from "./api";
+import { UpdateProgressView } from "./UpdateProgress";
+import type { Claim, LauncherUpdate, UpdateProgress, Overview } from "./api";
 
 interface Props {
   overview: Overview;
@@ -6,7 +7,9 @@ interface Props {
   onInstall: () => void;
   onSettings: () => void;
   launcherUpdate: LauncherUpdate | null;
+  launcherChecked: boolean;
   updatingLauncher: boolean;
+  updateProgress: UpdateProgress | null;
   onUpdateLauncher: () => void;
 }
 
@@ -34,7 +37,7 @@ export function isNewer(a: string, b: string) {
 
 /** The addon's and the Companion's versions, beside Play. Quiet when both are current; outlined in
  *  gold, with one button, when a newer version is ready. */
-export function StatusCard({ overview, busy, onInstall, onSettings, launcherUpdate, updatingLauncher, onUpdateLauncher }: Props) {
+export function StatusCard({ overview, busy, onInstall, onSettings, launcherUpdate, launcherChecked, updatingLauncher, updateProgress, onUpdateLauncher }: Props) {
   const { addon, lastAddonCheck, wow } = overview;
   const gameFound = !!wow.root && !wow.problem;
   const latest = lastAddonCheck?.latest ?? null;
@@ -64,10 +67,10 @@ export function StatusCard({ overview, busy, onInstall, onSettings, launcherUpda
       <div className={`card-row version-row${addonNew || (gameFound && !addon.installed) ? " is-new" : ""}`}>
         <span className="card-label">Addon</span>
         <span className="card-value" title={addonNew ? `Installed: ${addon.installed}` : undefined}>
-          {addon.installed && <strong>{addonNew ? latest : addon.installed}</strong>}
+          {addon.installed && <strong>{addon.installed} installed</strong>}
         </span>
         <span className={`card-note version-note${lastAddonCheck?.error && !addonNew ? " is-problem" : ""}`} title={lastAddonCheck?.message}>
-          {addonNote}
+          {addonNew ? `${latest} ready · ${addonNote}` : addonNote}
         </span>
         {!gameFound ? (
           <button className="version-action" onClick={onSettings}>
@@ -85,17 +88,18 @@ export function StatusCard({ overview, busy, onInstall, onSettings, launcherUpda
       <div className={`card-row version-row${launcherUpdate ? " is-new" : ""}`}>
         <span className="card-label">Companion</span>
         <span className="card-value" title={launcherUpdate ? `Installed: ${overview.launcherVersion}` : undefined}>
-          <strong>{launcherUpdate ? launcherUpdate.version : overview.launcherVersion}</strong>
+          <strong>{overview.launcherVersion} installed</strong>
         </span>
         <span className="card-note version-note">
-          {launcherUpdate ? (updatingLauncher ? "Updating" : overview.watching ? "Close the game" : "New version") : "Up to date"}
+          {launcherUpdate ? (updatingLauncher ? "Updating" : overview.watching ? "Close the game" : `${launcherUpdate.version} ready`) : launcherChecked ? "Up to date" : "Not checked"}
         </span>
         {launcherUpdate && (
-          <button className="version-action is-primary" disabled={updatingLauncher || overview.watching} onClick={onUpdateLauncher}>
+          <button className="version-action is-primary" disabled={busy || updatingLauncher || closeFirst || overview.launchState === "waiting" || overview.launchState === "starting"} onClick={onUpdateLauncher}>
             Restart to update
           </button>
         )}
       </div>
+      <UpdateProgressView progress={updateProgress} />
     </section>
   );
 }

@@ -44,6 +44,19 @@ function C.ScopeKey()
     if not id then return nil end
     return tostring(GetCurrentRegion()) .. ":" .. tostring(id)
 end
+-- "/emberlight info": what the server's settings need on launch day (docs/FOREVER.md), read in
+-- game in one go instead of /run lines: the realm as identities carry it (GAME_REALM) and the
+-- guild board (ALLOWED_SCOPES, region:clubId).
+function C.Info()
+    local realm = (GetNormalizedRealmName and GetNormalizedRealmName()) or (GetRealmName and GetRealmName()) or "unknown"
+    local board = C_Club and C_Club.GetGuildClubId and C_Club.GetGuildClubId()
+    local guild = IsInGuild and IsInGuild() and GetGuildInfo and GetGuildInfo("player")
+    return {
+        "addon " .. E.version .. ", " .. C.Build(),
+        "character " .. C.Name() .. " (realm " .. realm .. ")",
+        "guild " .. (guild or "none") .. ", board " .. (board and (tostring(GetCurrentRegion()) .. ":" .. tostring(board)) or "none"),
+    }
+end
 function C.Roster()
     if C.Channel() == "PARTY" then local _, roster = C.Party(); return roster or {} end
     local guild = C.ScopeKey()

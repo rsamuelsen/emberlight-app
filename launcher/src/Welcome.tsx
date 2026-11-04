@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { api, FLAVOR_NAMES, inTauri, type CharactersView, type Overview } from "./api";
+import { api, flavorName, foreverFlavors, inTauri, type CharactersView, type Overview } from "./api";
 import { linkOnWebsite, STATUS } from "./Characters";
 import { Scene } from "./Scene";
 import { Mark } from "./StatusCard";
@@ -58,6 +58,7 @@ export function Welcome({ overview, onUpdate, characters, onDone }: Props) {
   const [problem, setProblem] = useState<string | null>(null);
 
   const state = setupState(overview, characters);
+  const flavors = foreverFlavors(wow);
   const index = ORDER.indexOf(step);
   const go = (to: Step) => {
     setProblem(null);
@@ -145,7 +146,7 @@ export function Welcome({ overview, onUpdate, characters, onDone }: Props) {
                   {busy === "folder" ? "Saving" : state.folder ? "Change" : "Choose folder"}
                 </button>
               </div>
-              {wow.flavors.length > 1 && (
+              {flavors.length > 1 && (
                 <div className="guide-field">
                   <label htmlFor="guide-flavor">Game version</label>
                   <select
@@ -154,9 +155,9 @@ export function Welcome({ overview, onUpdate, characters, onDone }: Props) {
                     disabled={!!busy}
                     onChange={(e) => run("folder", () => api.saveSettings(settings.wowRoot, e.target.value, settings.server), onUpdate)}
                   >
-                    {wow.flavors.map((f) => (
+                    {flavors.map((f) => (
                       <option key={f} value={f}>
-                        {FLAVOR_NAMES[f] ?? f}
+                        {flavorName(f, wow.forever)}
                       </option>
                     ))}
                   </select>
@@ -168,7 +169,7 @@ export function Welcome({ overview, onUpdate, characters, onDone }: Props) {
           {step === "addon" && (
             <>
               <h1>Emberlight addon</h1>
-              <p className="guide-lead">The guild's noticeboard and letters inside the game. The Companion installs it and keeps it up to date.</p>
+              <p className="guide-lead">Guild events and members’ adventures inside the game. The Companion installs it and keeps it up to date.</p>
               <div className="guide-box">
                 <Mark status={state.addon ? "verified" : "pending"} />
                 <div>

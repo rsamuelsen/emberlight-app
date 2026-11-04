@@ -1,8 +1,8 @@
-## Interface: 16001, 120100
+## Interface: 16001, 120105, 120100
 ## Title: Emberlight
 ## Notes: Guild notices and correspondence.
 ## Author: Emberlight
-## Version: 0.8.9
+## Version: 0.8.10
 ## IconTexture: Interface\AddOns\Emberlight\Media\Crest
 ## AddonCompartmentFunc: Emberlight_OnAddonCompartmentClick
 ## SavedVariables: EmberlightDB

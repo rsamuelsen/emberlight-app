@@ -402,7 +402,7 @@ fn removal_from(n: &Notice, t: &Table) -> Option<Removal> {
     (valid_owner(moderator) && moderator != n.owner).then(|| Removal { scope: n.scope.clone(), id: n.id.clone(), moderator: moderator.to_owned() })
 }
 
-/// The name part of an identity, with its "-": `elthiern_hendil-`.
+/// The name part of an identity, with its "-": `alice_example-`.
 fn name_of(identity: &str) -> &str {
     identity.rfind('-').map_or("", |i| &identity[..=i])
 }
@@ -581,11 +581,11 @@ mod tests {
 
     #[test]
     fn hidden_realms_are_the_same_character() {
-        let linked = ["elthiern_hendil-classicbetapve2".to_string()];
-        assert!(owns(&linked, "elthiern_hendil-classicbetapve"));
-        assert!(owns(&linked, "elthiern_hendil-classicbetapve2"));
-        assert!(!owns(&linked, "nora_everwood-classicbetapve2"));
-        assert!(!owns(&linked, "elthiern"));
+        let linked = ["alice_example-classicbetapve2".to_string()];
+        assert!(owns(&linked, "alice_example-classicbetapve"));
+        assert!(owns(&linked, "alice_example-classicbetapve2"));
+        assert!(!owns(&linked, "bob_example-classicbetapve2"));
+        assert!(!owns(&linked, "alice"));
         let mut n = sample();
         n.id = "alice-otherrealm:1800000000000".into();
         n.owner = "alice-otherrealm".into();

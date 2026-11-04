@@ -14,13 +14,17 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_updater::UpdaterExt;
+use tauri_plugin_autostart::ManagerExt as AutostartExt;
+use tauri_plugin_window_state::{AppHandleExt as WindowStateExt, StateFlags};
 
 struct AppState {
     path: PathBuf,
     saved: Mutex<Saved>,
     watching: AtomicBool,
     /// When Play was last pressed, until the game is seen running.
-    launched: Mutex<Option<Instant>>,
+    launched: Mutex<Option<(Instant, game::LaunchMethod)>>,
+    starting: AtomicBool,
+    launch_problem: Mutex<Option<String>>,
     signing_in: AtomicBool,
     cancel_sign_in: AtomicBool,
     updating_addon: AtomicBool,
@@ -55,6 +59,8 @@ struct Overview {
     last_sync: Option<SyncReport>,
     watching: bool,
     launcher_version: String,
+    launch_state: String,
+    launch_problem: Option<String>,
 }
 
 fn overview_now(app: &AppHandle) -> Overview {
@@ -72,6 +78,10 @@ fn overview_now(app: &AppHandle) -> Overview {
         last_sync: saved.last_sync,
         watching: state.watching.load(Ordering::SeqCst),
         launcher_version: app.package_info().version.to_string(),
+        launch_state: if state.starting.load(Ordering::SeqCst) { "starting" } else if state.watching.load(Ordering::SeqCst) { "ingame" }
+            else if state.launched.lock().expect("launch lock").is_some() { "waiting" }
+            else if state.launch_problem.lock().expect("launch error lock").is_some() { "failed" } else { "idle" }.into(),
+        launch_problem: state.launch_problem.lock().expect("launch error lock").clone(),
         settings,
     }
 }
@@ -200,6 +210,7 @@ async fn sign_out(app: AppHandle) -> Result<Overview, String> {
             None => true,
         };
         let cleared = store::clear_token();
+        let _ = update_tray(app.clone(), None);
         app.state::<AppState>().update(|s| {
             s.settings.member_name = None;
             s.settings.discord_id = None;
@@ -301,10 +312,31 @@ async fn guild_events(app: AppHandle, kind: String) -> Result<Vec<api::GuildEven
     blocking(app, move |app| signed_in_client(app)?.events(&kind).map_err(|e| e.to_string())).await
 }
 
+#[tauri::command]
+fn desktop_settings(app: AppHandle) -> Result<bool, String> {
+    app.autolaunch().is_enabled().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn set_autostart(app: AppHandle, on: bool) -> Result<bool, String> {
+    if on { app.autolaunch().enable() } else { app.autolaunch().disable() }.map_err(|e| e.to_string())?;
+    desktop_settings(app)
+}
+
+#[tauri::command]
+fn update_tray(app: AppHandle, next_event: Option<String>) -> Result<(), String> {
+    if let Some(tray) = app.tray_by_id("main") {
+        let text = next_event.filter(|s| !s.trim().is_empty()).map(|s| format!("Emberlight Companion\n{}", s.chars().take(100).collect::<String>())).unwrap_or_else(|| "Emberlight Companion".into());
+        tray.set_tooltip(Some(text)).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 /// A Windows notification: a new guild event, or one the member joins starting soon. Sent from
 /// Rust, so the page needs no notification permission of its own.
 #[tauri::command]
 fn notify(app: AppHandle, title: String, body: String) -> Result<(), String> {
+    if store::token().is_none() { return Err("Sign in to receive guild reminders.".into()); }
     use tauri_plugin_notification::NotificationExt;
     app.notification().builder().title(title).body(body).show().map_err(|e| e.to_string())
 }
@@ -420,49 +452,81 @@ async fn launcher_update(app: AppHandle) -> Result<Option<LauncherUpdate>, Strin
 #[tauri::command]
 async fn install_launcher_update(app: AppHandle) -> Result<(), String> {
     let state = app.state::<AppState>();
-    if state.watching.load(Ordering::SeqCst) {
+    if state.watching.load(Ordering::SeqCst) || state.starting.load(Ordering::SeqCst) || state.launched.lock().expect("launch lock").is_some()
+        || !wow::running_clients(game::root(&state.settings()).ok().as_deref()).is_empty() {
         return Err("Update Emberlight Companion after you close World of Warcraft.".into());
     }
     let update = state.launcher_update.lock().expect("update lock").take().ok_or("There is no launcher update waiting.")?;
-    update
-        .download_and_install(|_, _| {}, || {})
+    let progress_app = app.clone();
+    let install_app = app.clone();
+    let mut downloaded = 0u64;
+    let mut last_progress = Instant::now();
+    let outcome = update
+        .download_and_install(move |bytes, total| {
+            downloaded += bytes as u64;
+            if downloaded == bytes as u64 || last_progress.elapsed() >= Duration::from_millis(200) || total == Some(downloaded) {
+            last_progress = Instant::now();
+            let _ = progress_app.emit("launcher-update-progress", serde_json::json!({"stage":"downloading", "downloaded":downloaded, "total":total}));
+            }
+        }, move || { let _ = install_app.emit("launcher-update-progress", serde_json::json!({"stage":"installing"})); })
         .await
-        .map_err(|e| format!("The update could not be installed ({e})."))?;
+        .map_err(|e| format!("The update could not be installed ({e})."));
+    if let Err(error) = outcome {
+        *state.launcher_update.lock().expect("update lock") = Some(update);
+        let _ = app.emit("launcher-update-progress", serde_json::json!({"stage":"failed"}));
+        return Err(error);
+    }
     app.restart();
 }
 
 #[tauri::command]
 async fn play(app: AppHandle) -> Result<Overview, String> {
     blocking(app, |app| {
-        let settings = app.state::<AppState>().settings();
-        let root = game::root(&settings)?;
-        if !wow::running_clients(Some(&root)).is_empty() {
-            return Err("World of Warcraft is already running.".into());
-        }
-        if app.state::<AppState>().updating_addon.load(Ordering::SeqCst) {
-            return Err("Wait a moment: the addon is being updated.".into());
-        }
-        record_sync(app);
-        game::launch(&settings)?;
-        if let Some(window) = app.get_webview_window("main") {
-            let _ = window.hide();
-        }
         let state = app.state::<AppState>();
-        *state.launched.lock().expect("launch lock") = Some(Instant::now());
-        state.watching.store(true, Ordering::SeqCst);
+        if state.starting.swap(true, Ordering::SeqCst) { return Err("The game is already starting.".into()); }
+        let result: Result<(), String> = (|| {
+            let settings = state.settings();
+            let root = game::root(&settings)?;
+            if !wow::running_clients(Some(&root)).is_empty() { return Err("World of Warcraft is already running.".into()); }
+            if state.launched.lock().expect("launch lock").is_some() { return Err("Waiting for the game to start.".into()); }
+            if state.updating_addon.load(Ordering::SeqCst) { return Err("Wait a moment: the addon is being updated.".into()); }
+            *state.launch_problem.lock().expect("launch error lock") = None;
+            let _ = app.emit("overview-changed", ());
+            record_sync(app);
+            *state.launched.lock().expect("launch lock") = Some((Instant::now(), game::LaunchMethod::Direct));
+            match game::launch(&settings) {
+                Ok(method) => {
+                    let mut pending = state.launched.lock().expect("launch lock");
+                    if pending.is_some() { *pending = Some((Instant::now(), method)); }
+                },
+                Err(error) => { *state.launched.lock().expect("launch lock") = None; return Err(error); }
+            }
+            Ok(())
+        })();
+        state.starting.store(false, Ordering::SeqCst);
+        if let Err(error) = &result { *state.launch_problem.lock().expect("launch error lock") = Some(error.clone()); }
+        let _ = app.emit("overview-changed", ());
+        result?;
         Ok(overview_now(app))
-    })
-    .await
+    }).await
 }
 
 /// Close from the title bar: stay in the tray while a game session is being watched, or always when
 /// the member keeps the app in the tray (the default). Quit is in the tray menu.
 #[tauri::command]
 fn close_window(app: AppHandle) {
+    let _ = app.emit("window-activity", false);
     let state = app.state::<AppState>();
     if state.watching.load(Ordering::SeqCst) || state.settings().keep_in_tray {
         if let Some(window) = app.get_webview_window("main") {
             let _ = window.hide();
+        }
+        if !state.settings().tray_notice_seen {
+            use tauri_plugin_notification::NotificationExt;
+            if app.notification().builder().title("Emberlight Companion is still running")
+                .body("Open it from the lantern beside the clock. Choose Quit there to close it.").show().is_ok() {
+                let _ = state.update(|s| s.settings.tray_notice_seen = true);
+            }
         }
     } else {
         app.exit(0);
@@ -471,7 +535,7 @@ fn close_window(app: AppHandle) {
 
 /// Watch for the game for as long as the app is open, however it was started (Play here, or
 /// Battle.net directly). When it starts or closes the window is told, and when it closes what it
-/// saved is synced. After Play, the game gets ten minutes to appear.
+/// saved is synced. A direct start and the Battle.net fallback each get a minute to appear.
 fn monitor_game(app: AppHandle) {
     std::thread::spawn(move || {
         let mut clients = wow::Clients::new();
@@ -482,17 +546,25 @@ fn monitor_game(app: AppHandle) {
             let running = !clients.running(game::root(&state.settings()).ok().as_deref()).is_empty();
             if running == seen {
                 let mut launched = state.launched.lock().expect("launch lock");
-                let waiting = launched.is_some_and(|at| at.elapsed() <= Duration::from_secs(600));
-                if !running && !waiting && state.watching.swap(false, Ordering::SeqCst) {
-                    *launched = None;
+                if !running && launched.is_some_and(|(at, _)| at.elapsed() >= Duration::from_secs(60)) {
+                    if launched.is_some_and(|(_, method)| method == game::LaunchMethod::Direct) && game::fallback_launch(&state.settings()).is_ok() {
+                        *launched = Some((Instant::now(), game::LaunchMethod::BattleNet));
+                    } else {
+                        *launched = None;
+                        *state.launch_problem.lock().expect("launch error lock") = Some("World of Warcraft did not appear. Try again, or start it from Battle.net.".into());
+                        drop(launched);
+                        show_window(&app);
+                    }
                     let _ = app.emit("overview-changed", ());
                 }
                 continue;
             }
             seen = running;
             if running {
-                *state.launched.lock().expect("launch lock") = None;
+                let launched_here = state.launched.lock().expect("launch lock").take().is_some();
+                *state.launch_problem.lock().expect("launch error lock") = None;
                 state.watching.store(true, Ordering::SeqCst);
+                if launched_here && let Some(window) = app.get_webview_window("main") { let _ = window.hide(); }
             } else {
                 // WoW writes SavedVariables before it exits; give the file system a moment.
                 std::thread::sleep(Duration::from_secs(2));
@@ -516,8 +588,10 @@ fn show_window(app: &AppHandle) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        // Must be registered first: a second launch just brings the open window forward.
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_window(app)))
+        // Must be first. A quiet login launch never steals focus from an existing instance.
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| { if !args.iter().any(|a| a == "--quiet") { show_window(app); } }))
+        .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec!["--quiet"])))
+        .plugin(tauri_plugin_window_state::Builder::default().with_state_flags(StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED).build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
@@ -536,6 +610,8 @@ pub fn run() {
                 saved: Mutex::new(saved),
                 watching: AtomicBool::new(false),
                 launched: Mutex::new(None),
+                starting: AtomicBool::new(false),
+                launch_problem: Mutex::new(None),
                 signing_in: AtomicBool::new(false),
                 cancel_sign_in: AtomicBool::new(false),
                 updating_addon: AtomicBool::new(false),
@@ -544,15 +620,29 @@ pub fn run() {
             });
 
             let open = MenuItem::with_id(app, "open", "Open Emberlight", true, None::<&str>)?;
+            let sync = MenuItem::with_id(app, "sync", "Sync now", true, None::<&str>)?;
+            let play_item = MenuItem::with_id(app, "play", "Play", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&open, &quit])?;
+            let menu = Menu::with_items(app, &[&open, &sync, &play_item, &quit])?;
             let mut tray = TrayIconBuilder::with_id("main")
                 .tooltip("Emberlight")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "open" => show_window(app),
-                    "quit" => app.exit(0),
+                    "sync" => {
+                        let handle = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            let failed = match sync_now(handle.clone()).await {
+                                Ok(view) => view.last_sync.is_some_and(|report| report.error.is_some() || !report.rejected.is_empty()),
+                                Err(_) => true,
+                            };
+                            if failed { show_window(&handle); }
+                            let _ = handle.emit("overview-changed", ());
+                        });
+                    }
+                    "play" => { let handle = app.clone(); tauri::async_runtime::spawn(async move { if play(handle.clone()).await.is_err() { show_window(&handle); } }); }
+                    "quit" => { let _ = app.save_window_state(StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED); app.exit(0); },
                     _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
@@ -565,9 +655,17 @@ pub fn run() {
             }
             tray.build(app)?;
             monitor_game(app.handle().clone());
+            if !std::env::args().any(|a| a == "--quiet") { show_window(app.handle()); }
             Ok(())
         })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::Focused(focused) = event { let _ = window.app_handle().emit("window-activity", *focused && window.is_visible().unwrap_or(false)); }
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event { api.prevent_close(); close_window(window.app_handle().clone()); }
+        })
         .invoke_handler(tauri::generate_handler![
+            desktop_settings,
+            set_autostart,
+            update_tray,
             overview,
             save_settings,
             sign_in,

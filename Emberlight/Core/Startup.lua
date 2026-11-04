@@ -25,6 +25,8 @@ SlashCmdList.EMBERLIGHT = function(message)
     if code then
         local ok, problem = E.Sync.Verify(code)
         DEFAULT_CHAT_FRAME:AddMessage(ok and "Emberlight: proof sent. Guild members online will report it to the website at their next sync." or ("Emberlight: " .. problem))
+    elseif type(message) == "string" and message:match("^%s*[Ii][Nn][Ff][Oo]%s*$") then
+        for _, line in ipairs(E.Client.Info()) do DEFAULT_CHAT_FRAME:AddMessage("Emberlight: " .. line) end
     else
         E.UI.Toggle()
     end

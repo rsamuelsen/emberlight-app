@@ -222,9 +222,15 @@ fn release_client(server: &str) -> Result<(String, reqwest::blocking::Client)> {
     Ok((base.as_str().trim_end_matches('/').to_owned(), http))
 }
 
-/// The guild's newest signed release that this app may install in `flavor`, or `None` when
-/// nothing is published yet.
-fn fetch_release(root: &str, http: &reqwest::blocking::Client, flavor: Option<&str>, public_key: &str, app_version: &str) -> Result<Option<Release>> {
+/// Whether a release may go into a game folder described by `tags` (`paths::folder_tags`: the
+/// folder's name, and "forever" for any WoW: Forever folder). No tags means no check.
+pub fn allowed_in(release: &Release, tags: Option<&[String]>) -> bool {
+    tags.is_none_or(|tags| tags.iter().any(|t| release.flavors.iter().any(|f| f == t)))
+}
+
+/// The guild's newest signed release that this app may install in the game folder described by
+/// `flavor` (its tags), or `None` when nothing is published yet.
+fn fetch_release(root: &str, http: &reqwest::blocking::Client, flavor: Option<&[String]>, public_key: &str, app_version: &str) -> Result<Option<Release>> {
     let manifest = http.get(format!("{root}/v1/releases/addon/manifest.json")).send().context("could not reach the Emberlight server")?;
     if manifest.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(None);
@@ -236,21 +242,22 @@ fn fetch_release(root: &str, http: &reqwest::blocking::Client, flavor: Option<&s
     if is_newer(&release.min_launcher, app_version) {
         bail!("Emberlight {} needs a newer Emberlight Companion; update it first", release.version);
     }
-    if flavor.is_some_and(|f| !release.flavors.iter().any(|r| r == f)) {
+    if !allowed_in(&release, flavor) {
         bail!("Emberlight {} is not made for this game version", release.version);
     }
     Ok(Some(release))
 }
 
 /// Only look: the version of the guild's newest release, without installing anything.
-pub fn latest_version(server: &str, flavor: Option<&str>, public_key: &str, app_version: &str) -> Result<Option<String>> {
+pub fn latest_version(server: &str, flavor: Option<&[String]>, public_key: &str, app_version: &str) -> Result<Option<String>> {
     let (root, http) = release_client(server)?;
     Ok(fetch_release(&root, &http, flavor, public_key, app_version)?.map(|r| r.version))
 }
 
 /// Fetch the signed manifest from `server`, and install the release if it is newer than what is
-/// in `addons` (or nothing is installed). `flavor` is the game folder (`_retail_`) when known.
-pub fn check_and_install(server: &str, addons: &Path, flavor: Option<&str>, public_key: &str, app_version: &str) -> Result<Outcome> {
+/// in `addons` (or nothing is installed). `flavor` is the game folder's tags
+/// (`paths::folder_tags`) when the folder is known.
+pub fn check_and_install(server: &str, addons: &Path, flavor: Option<&[String]>, public_key: &str, app_version: &str) -> Result<Outcome> {
     let (root, http) = release_client(server)?;
     let Some(release) = fetch_release(&root, &http, flavor, public_key, app_version)? else {
         return Ok(Outcome::NotPublished);
@@ -352,6 +359,21 @@ mod tests {
         assert!(!is_newer("0.5.9", "0.6.0"));
         assert!(!is_newer("0.6.0-beta", "0.5.0"));
         assert!(is_newer("0.6.0", "unknown"));
+    }
+
+    #[test]
+    fn a_release_names_the_game_folders_it_may_go_into() {
+        let (sk, _) = key();
+        let (_, mut release) = manifest(&sk, "1.0.0", b"zip");
+        release.flavors = vec!["_retail_".into(), "_classic_beta_".into(), "forever".into()];
+        let tags = |t: &[&str]| t.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(allowed_in(&release, Some(&tags(&["_retail_"]))));
+        // The real Forever folder, whatever its name, is allowed once it is recognised as Forever.
+        assert!(allowed_in(&release, Some(&tags(&["_someday_", "forever"]))));
+        assert!(!allowed_in(&release, Some(&tags(&["_classic_era_"]))));
+        assert!(allowed_in(&release, None));
+        release.flavors = vec!["_retail_".into()];
+        assert!(!allowed_in(&release, Some(&tags(&["_someday_", "forever"]))));
     }
 
     #[test]

@@ -14,6 +14,8 @@ export interface Notice {
   title: string;
   location: string;
   body: string;
+  ownReplies?: { response: string }[];
+  authorName?: string | null;
 }
 
 export interface Settings {
@@ -30,7 +32,10 @@ export interface WowStatus {
   root: string | null;
   problem: string | null;
   flavors: string[];
+  /** The game folders that are WoW: Forever (the released game or its beta), whatever their name. */
+  forever?: string[];
   emberlight: string | null;
+  version?: string | null;
   accounts: string[];
   gameRunning: boolean;
   /** The game programs still running. */
@@ -71,8 +76,12 @@ export interface Overview {
   archiveWritten: number | null;
   lastSync: SyncReport | null;
   watching: boolean;
+  launchState?: "idle" | "starting" | "waiting" | "ingame" | "failed";
+  launchProblem?: string | null;
   launcherVersion: string;
 }
+
+export interface UpdateProgress { stage: "downloading" | "installing" | "failed"; downloaded?: number; total?: number | null; }
 
 export interface LauncherUpdate {
   version: string;
@@ -85,6 +94,7 @@ export interface Claim {
   status: "pending" | "verified" | "refused";
   method: string | null;
   createdAt: number;
+  reason?: string | null;
 }
 
 export interface Announcement {
@@ -129,6 +139,8 @@ export const eventAsNotice = (e: GuildEvent): Notice => ({
   title: e.title,
   location: e.location ?? "",
   body: e.body,
+  ownReplies: e.ownReplies,
+  authorName: e.authorName,
 });
 
 export interface CharactersView {
@@ -154,6 +166,10 @@ async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> 
 }
 
 export const api = {
+  notify: (title: string, body: string) => call<void>("notify", { title, body }),
+  desktopSettings: () => call<boolean>("desktop_settings"),
+  setAutostart: (on: boolean) => call<boolean>("set_autostart", { on }),
+  updateTray: (nextEvent: string | null) => call<void>("update_tray", { nextEvent }),
   overview: () => call<Overview>("overview"),
   saveSettings: (wowRoot: string | null, flavor: string, server: string) => call<Overview>("save_settings", { wowRoot, flavor, server }),
   signIn: (token: string) => call<Overview>("sign_in", { token }),
@@ -188,6 +204,7 @@ export const CATEGORIES = ["", "Journey", "Call for aid", "Gathering", "Guild ev
 
 export const FLAVOR_NAMES: Record<string, string> = {
   _retail_: "Retail",
+  _forever_: "WoW: Forever",
   _classic_beta_: "Forever beta",
   _classic_: "Classic",
   _classic_era_: "Classic Era",
@@ -196,4 +213,10 @@ export const FLAVOR_NAMES: Record<string, string> = {
   _beta_: "Beta",
 };
 
-export const flavorName = (f: string) => FLAVOR_NAMES[f] ?? f.replace(/^_|_$/g, "").replace(/_/g, " ");
+/** Only Forever clients belong in the Companion's game-version controls. */
+export const foreverFlavors = (wow: WowStatus) => wow.flavors
+  .filter(f => f === "_forever_" || f === "_classic_beta_" || wow.forever?.includes(f))
+  .sort((a, b) => Number(b === "_forever_") - Number(a === "_forever_"));
+
+export const flavorName = (f: string, forever: string[] = []) =>
+  forever.includes(f) && f !== "_classic_beta_" ? "WoW: Forever" : FLAVOR_NAMES[f] ?? f.replace(/^_|_$/g, "").replace(/_/g, " ");

@@ -1,8 +1,10 @@
+import { useEffect } from "react";
 import { openInBrowser as openLink, type Announcement } from "./api";
 import { Blocks, inline, plainText, split } from "./discord";
+import { SERVER_TIME_ZONE, serverWhen } from "./events";
+import { Arrow, EmptyState } from "./UI";
 
-const day = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short" });
-const dayLong = new Intl.DateTimeFormat("en-GB", { weekday: "long", day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" });
+const day = new Intl.DateTimeFormat("en-GB", { timeZone: SERVER_TIME_ZONE, day: "numeric", month: "short" });
 
 interface ListProps {
   items: Announcement[] | null;
@@ -11,6 +13,8 @@ interface ListProps {
   limit?: number;
   selected?: string | null;
   onOpen: (id: string) => void;
+  isUnread?: (a: Announcement) => boolean;
+  onViewed?: (a: Announcement) => void;
 }
 
 /** Waiting, empty or failed states, shared by the list and the reader. */
@@ -23,9 +27,9 @@ function state(items: Announcement[] | null, signedIn: boolean, problem: string 
 }
 
 /** Announcements from the guild's Discord: date, title and a short preview. */
-export function NewsList({ items, signedIn, problem, limit, selected, onOpen }: ListProps) {
+export function NewsList({ items, signedIn, problem, limit, selected, onOpen, isUnread }: ListProps) {
   const quiet = state(items, signedIn, problem);
-  if (quiet || !items) return <p className="quiet">{quiet}</p>;
+  if (quiet || !items) return <EmptyState title={quiet ?? "Fetching announcements…"} problem={signedIn && !!problem} />;
   return (
     <ol className="news">
       {items.slice(0, limit).map((a) => {
@@ -33,9 +37,10 @@ export function NewsList({ items, signedIn, problem, limit, selected, onOpen }: 
         const preview = plainText(body);
         return (
           <li key={a.id}>
-            <button type="button" className={`news-row${selected === a.id ? " is-selected" : ""}`} aria-current={selected === a.id} onClick={() => onOpen(a.id)}>
+            <button type="button" className={`news-row${selected === a.id ? " is-selected" : ""}${isUnread?.(a) ? " is-unread" : ""}`} aria-current={selected === a.id} onClick={() => onOpen(a.id)}>
               <span className="news-date">{day.format(a.createdAt * 1000)}</span>
               <span className="news-title">{title ? plainText(title) : "Announcement"}</span>
+              <Arrow />
               {preview && <span className="news-preview">{preview}</span>}
             </button>
           </li>
@@ -46,12 +51,14 @@ export function NewsList({ items, signedIn, problem, limit, selected, onOpen }: 
 }
 
 /** The full announcements page: the list on the left, the chosen one in full on the right. */
-export function NewsReader({ items, signedIn, problem, selected, onOpen }: ListProps) {
+export function NewsReader({ items, signedIn, problem, selected, onOpen, isUnread, onViewed }: ListProps) {
+  const viewed = items?.find(a => a.id === selected) ?? items?.[0];
+  useEffect(() => { if (signedIn && !problem && viewed) onViewed?.(viewed); }, [signedIn, problem, viewed, onViewed]);
   const quiet = state(items, signedIn, problem);
   if (quiet || !items) {
     return (
       <div className="page-empty">
-        <p>{quiet}</p>
+        <EmptyState title={quiet ?? "Fetching announcements…"} problem={signedIn && !!problem} />
       </div>
     );
   }
@@ -59,11 +66,11 @@ export function NewsReader({ items, signedIn, problem, selected, onOpen }: ListP
   const { title, body } = split(current.content);
   return (
     <div className="reader">
-      <div className="reader-list">
-        <NewsList items={items} signedIn={signedIn} problem={problem} selected={current.id} onOpen={onOpen} />
-      </div>
-      <article className="reader-page" key={current.id}>
-        <p className="reader-date">{dayLong.format(current.createdAt * 1000)}</p>
+      <nav className="reader-list" aria-label="Announcements">
+        <NewsList items={items} signedIn={signedIn} problem={problem} selected={current.id} onOpen={onOpen} isUnread={isUnread} />
+      </nav>
+      <article tabIndex={0} aria-label="Selected announcement" className="reader-page" key={current.id}>
+        <p className="reader-date">{serverWhen(current.createdAt, true)}</p>
         <h2 className="reader-title">{title ? inline(title, openLink) : "Announcement"}</h2>
         <div className="news-body">
           <Blocks text={body} openLink={openLink} />

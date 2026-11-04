@@ -42,6 +42,8 @@ pub struct Claim {
     pub status: String,
     pub method: Option<String>,
     pub created_at: i64,
+    #[serde(default, alias = "refuseReason")]
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -359,6 +361,15 @@ impl Client {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn character_refusal_reasons_work_with_current_and_older_servers() {
+        let current: Claim = serde_json::from_str(r#"{"id":1,"name":"Example","status":"refused","method":null,"createdAt":1,"refuseReason":"Check the name"}"#).unwrap();
+        assert_eq!(current.reason.as_deref(), Some("Check the name"));
+        let legacy: Claim = serde_json::from_str(r#"{"id":1,"name":"Example","status":"verified","method":"officer","createdAt":1}"#).unwrap();
+        assert_eq!(legacy.reason, None);
+        assert_eq!(serde_json::to_value(current).unwrap()["reason"], "Check the name");
+    }
 
     #[test]
     fn only_https_or_local() {

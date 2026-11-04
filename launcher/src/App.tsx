@@ -1,16 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Agenda, type EventsView } from "./Agenda";
 import { NewsReader } from "./Announcements";
-import { api, eventAsNotice, inTauri, type Announcement, type GuildEvent, type CharactersView, type LauncherUpdate, type Notice, type Overview } from "./api";
-import { adventures, officialEvents, openEvent, useNow } from "./events";
+import { api, eventAsNotice, inTauri, type Announcement, type LauncherUpdate, type UpdateProgress, type Notice, type Overview } from "./api";
+import { adventures, officialEvents, fmtTime, useNow } from "./events";
 import { Home } from "./Home";
-import { checkNotifications } from "./notifications";
+import { checkNotifications, clearReminderSession } from "./notifications";
 import { Lantern, type LanternMood } from "./Lantern";
 import { Scene, type RoadState } from "./Scene";
 import { Characters } from "./Characters";
 import { Settings } from "./Settings";
 import { StatusCard } from "./StatusCard";
 import { setupDone, setupState, Welcome } from "./Welcome";
+import { useGuildData } from "./useGuildData";
+import { EventDetails } from "./EventDetails";
+import { announcementUnread, markAnnouncementRead } from "./readMarks";
+import { syncSummary, syncRecovery } from "./syncStatus";
 import crest from "./assets/crest.png";
 
 const clock = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit" });
@@ -31,6 +35,13 @@ const PAGES: [Page, string][] = [
   ["characters", "Characters"],
   ["news", "Announcements"],
 ];
+const PAGE_DESCRIPTION: Record<Page, string> = {
+  home: "Events, announcements and members’ adventures.",
+  events: "Find your next gathering with the guild.",
+  characters: "Your linked characters and verification requests.",
+  news: "The latest from the guild’s Discord.",
+  settings: "Your account, game and Companion preferences.",
+};
 const PAGE_NAME: Record<Page, string> = { home: "Home", events: "Events", characters: "Characters", news: "Announcements", settings: "Settings" };
 
 function syncedAt(at: number) {
@@ -38,14 +49,47 @@ function syncedAt(at: number) {
   return new Date().toDateString() === d.toDateString() ? clock.format(d) : `${day.format(d)}, ${clock.format(d)}`;
 }
 
-async function windowAction(action: "minimize" | "startDragging") {
+async function windowAction(action: "minimize" | "startDragging" | "toggleMaximize") {
   if (!inTauri) return;
   const { getCurrentWindow } = await import("@tauri-apps/api/window");
   await getCurrentWindow()[action]();
 }
 
+function WindowButtons() {
+  const [maximized, setMaximized] = useState(false);
+  useEffect(() => {
+    if (!inTauri) return;
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    import("@tauri-apps/api/window").then(async ({ getCurrentWindow }) => {
+      const window = getCurrentWindow();
+      const update = () => window.isMaximized().then(value => { if (!disposed) setMaximized(value); });
+      await update();
+      const stop = await window.onResized(update);
+      if (disposed) stop(); else unlisten = stop;
+    });
+    return () => { disposed = true; unlisten?.(); };
+  }, []);
+  return (
+    <>
+      <button className="stud" aria-label="Minimise" onClick={() => windowAction("minimize")}>
+        <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 6.5 H9.5" /></svg>
+      </button>
+      <button className="stud" aria-label={maximized ? "Restore window" : "Maximise"} onClick={() => windowAction("toggleMaximize")}>
+        <svg viewBox="0 0 12 12" aria-hidden="true"><path d={maximized ? "M4 2h6v6M2 4h6v6H2z" : "M2 2h8v8H2z"} /></svg>
+      </button>
+      <button className="stud stud-close" aria-label="Close" onClick={() => (inTauri ? api.closeWindow() : undefined)}>
+        <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3 3 L9 9 M9 3 L3 9" /></svg>
+      </button>
+    </>
+  );
+}
+
 export function App() {
   const [overview, setOverview] = useState<Overview | null>(null);
+  const authEpoch = useRef(0);
+  const signingOut = useRef(false);
+  const applyOverview = (next: Overview) => { if (!signingOut.current) setOverview(next); };
   const [busy, setBusy] = useState<"sync" | "play" | "addon" | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [page, setPage] = useState<Page>("home");
@@ -55,12 +99,29 @@ export function App() {
   const [guide, setGuide] = useState<boolean | null>(null);
   const [newsId, setNewsId] = useState<string | null>(null);
   const now = useNow();
+  const [selectedEvent, setSelectedEvent] = useState<Notice | null>(null);
+  const [foreground, setForeground] = useState(() => !document.hidden && document.hasFocus());
+  const [, setReadRevision] = useState(0);
+  const [notificationRevision, setNotificationRevision] = useState(0);
+  const [launchProgress, setLaunchProgress] = useState<UpdateProgress | null>(null);
+  useEffect(() => {
+    const update = () => setForeground(!document.hidden && document.hasFocus());
+    window.addEventListener("focus", update); window.addEventListener("blur", update); document.addEventListener("visibilitychange", update);
+    const notificationSettings = () => setNotificationRevision(n => n + 1);
+    window.addEventListener("emberlight-notification-settings", notificationSettings);
+    return () => { window.removeEventListener("focus", update); window.removeEventListener("blur", update); document.removeEventListener("visibilitychange", update); window.removeEventListener("emberlight-notification-settings", notificationSettings); };
+  }, []);
 
-  // Counts every refresh, so what is read from the server alongside the overview is read again too.
+  // Each overview refresh also asks the guild-data cache to refresh stale information.
   const [refreshed, setRefreshed] = useState(0);
+  const overviewRead = useRef<Promise<void> | null>(null);
   const refresh = useCallback(() => {
-    api.overview().then(setOverview, (e) => setProblem(message(e)));
-    setRefreshed((n) => n + 1);
+    if (overviewRead.current) return overviewRead.current;
+    const epoch = authEpoch.current;
+    const read = api.overview().then(next => { if (epoch === authEpoch.current && !signingOut.current) setOverview(next); }, e => setProblem(message(e))).finally(() => { overviewRead.current = null; });
+    overviewRead.current = read;
+    setRefreshed(n => n + 1);
+    return read;
   }, []);
 
   useEffect(() => {
@@ -76,126 +137,56 @@ export function App() {
   useEffect(() => {
     refresh();
     window.addEventListener("focus", refresh);
+    let disposed = false;
     let unlisten: (() => void) | undefined;
     if (inTauri) {
-      import("@tauri-apps/api/event").then(({ listen }) => listen("overview-changed", refresh)).then((u) => (unlisten = u));
+      import("@tauri-apps/api/event").then(async ({ listen }) => {
+        const stops = await Promise.all([listen("overview-changed", refresh), listen<boolean>("window-activity", ({ payload }) => setForeground(payload))]);
+        const stop = () => stops.forEach(fn => fn());
+        if (disposed) stop(); else unlisten = stop;
+      });
     }
-    return () => {
-      window.removeEventListener("focus", refresh);
-      unlisten?.();
-    };
+    return () => { disposed = true; window.removeEventListener("focus", refresh); unlisten?.(); };
   }, [refresh]);
 
-  const [news, setNews] = useState<{ items: Announcement[] | null; problem: string | null }>({ items: null, problem: null });
   const signedInNow = overview?.signedIn ?? false;
-
-  // The member's name and Discord id, read again once each time the app opens signed in.
+  const account = signedInNow ? overview?.settings.discordId ?? overview?.settings.memberName ?? "signed-in" : null;
+  const notificationAccount = signedInNow ? overview?.settings.discordId ?? null : null;
+  const guild = useGuildData(account, refreshed);
+  const { news, characters, charactersProblem, official: officialRaw } = guild;
+  const serverEvents = useMemo(() => guild.official?.map(eventAsNotice) ?? null, [guild.official]);
+  const serverAdventures = useMemo(() => guild.adventures?.map(eventAsNotice) ?? null, [guild.adventures]);
   const accountRead = useRef(false);
   useEffect(() => {
-    if (!signedInNow || accountRead.current) return;
-    accountRead.current = true;
-    api.refreshAccount().then(setOverview, () => undefined);
+    if (!signedInNow) { accountRead.current = false; clearReminderSession(); setSelectedEvent(null); return; }
+    if (!accountRead.current) { accountRead.current = true; const epoch = authEpoch.current; api.refreshAccount().then(next => { if (epoch === authEpoch.current && !signingOut.current) setOverview(next); }, () => undefined); }
   }, [signedInNow]);
-
-  // Sign in and out from the title bar as well as from Settings.
+  useEffect(() => { clearReminderSession(); }, [notificationAccount]);
+  useEffect(() => { if (officialRaw && notificationAccount) void checkNotifications(officialRaw, now, notificationAccount); }, [officialRaw, now, notificationAccount, notificationRevision]);
   const [signingIn, setSigningIn] = useState(false);
   const titleSignIn = async () => {
-    setSigningIn(true);
-    setProblem(null);
-    try {
-      setOverview(await api.signInDiscord());
-    } catch (e) {
-      setProblem(message(e));
-    } finally {
-      setSigningIn(false);
-    }
+    if (signingOut.current) return;
+    setSigningIn(true); setProblem(null);
+    try { setOverview(await api.signInDiscord()); } catch (e) { setProblem(message(e)); } finally { setSigningIn(false); }
   };
-  const titleSignOut = () => api.signOut().then(setOverview, (e) => setProblem(message(e)));
-  const lastSyncAt = overview?.lastSync?.at;
-  useEffect(() => {
-    if (!signedInNow) {
-      setNews({ items: null, problem: null });
-      return;
-    }
-    let live = true;
-    const load = () =>
-      api.announcements().then(
-        (items) => live && setNews({ items, problem: null }),
-        (e) => live && setNews((n) => ({ items: n.items, problem: n.items ? null : message(e) })),
-      );
-    load();
-    const timer = window.setInterval(load, 5 * 60 * 1000);
-    return () => {
-      live = false;
-      window.clearInterval(timer);
-    };
-  }, [signedInNow, lastSyncAt]);
-
-  // The guild's official events, read from the server like the website does. Until that answers
-  // (or while it cannot be reached) the events in the game's synced file stand in.
-  // Members' adventures come the same way, kept apart from the official events.
-  const [serverEvents, setServerEvents] = useState<Notice[] | null>(null);
-  const [serverAdventures, setServerAdventures] = useState<Notice[] | null>(null);
-  const [officialRaw, setOfficialRaw] = useState<GuildEvent[] | null>(null);
-  useEffect(() => {
-    if (!signedInNow) {
-      setServerEvents(null);
-      setServerAdventures(null);
-      return;
-    }
-    let live = true;
-    const load = () => {
-      api.guildEvents("official").then(
-        (items) => {
-          if (!live) return;
-          setServerEvents(items.map(eventAsNotice));
-          setOfficialRaw(items);
-        },
-        () => undefined,
-      );
-      api.guildEvents("member").then(
-        (items) => live && setServerAdventures(items.map(eventAsNotice)),
-        () => undefined,
-      );
-    };
-    load();
-    const timer = window.setInterval(load, 5 * 60 * 1000);
-    return () => {
-      live = false;
-      window.clearInterval(timer);
-    };
-  }, [signedInNow, lastSyncAt, refreshed]);
-
-  // Windows notifications: a new guild event, or one the member joins starting within the hour.
-  useEffect(() => {
-    if (officialRaw) checkNotifications(officialRaw, now);
-  }, [officialRaw, now]);
-
-  // The member's characters, for the status card and Settings. Read again when Settings opens,
-  // when the window gets focus and when the game starts or closes: an officer may have answered a
-  // request meanwhile, or a newly played character may be on this computer.
-  const [characters, setCharacters] = useState<CharactersView | null>(null);
-  const inSettings = page === "settings" || page === "characters";
-  useEffect(() => {
-    if (!signedInNow) {
-      setCharacters(null);
-      return;
-    }
-    let live = true;
-    api.characters().then(
-      (c) => live && setCharacters(c),
-      () => undefined,
-    );
-    return () => {
-      live = false;
-    };
-  }, [signedInNow, inSettings, refreshed]);
+  const titleSignOut = async () => {
+    signingOut.current = true; authEpoch.current++;
+    clearReminderSession(); setSelectedEvent(null);
+    setOverview(o => o ? { ...o, signedIn: false } : o);
+    try { const next = await api.signOut(); setOverview(next); return next; }
+    catch (e) { refresh(); throw e; }
+    finally { signingOut.current = false; }
+  };
+  const markRead = useCallback((item: Announcement) => { if (markAnnouncementRead(notificationAccount, item)) setReadRevision(n => n + 1); }, [notificationAccount]);
+  const isUnread = (item: Announcement) => announcementUnread(notificationAccount, item);
 
   // When the launcher opens: update the addon if the guild published a newer version (at most
   // hourly), then sync, unless the game is running or it synced a moment ago.
   const opened = useRef(false);
   const [addonNote, setAddonNote] = useState<string | null>(null);
   const [launcherUpdate, setLauncherUpdate] = useState<LauncherUpdate | null>(null);
+  const [launcherChecked, setLauncherChecked] = useState(false);
+  const launcherResult = (update: LauncherUpdate | null) => { setLauncherUpdate(update); setLauncherChecked(true); };
   useEffect(() => {
     if (!overview || opened.current) return;
     opened.current = true;
@@ -208,7 +199,7 @@ export function App() {
       if (due) await addonUpdate(overview, idle);
       if (sync) await act("sync", api.syncNow);
       // Last, and quietly: a newer launcher is offered, never installed without asking.
-      api.launcherUpdate().then(setLauncherUpdate, () => undefined);
+      api.launcherUpdate().then(launcherResult, () => undefined);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [overview]);
@@ -233,7 +224,7 @@ export function App() {
       const o = latest.current;
       if (!o) return;
       if (o.addon.installed && !o.wow.problem) addonUpdate(o, !o.watching && !o.wow.gameRunning);
-      api.launcherUpdate().then(setLauncherUpdate, () => undefined);
+      api.launcherUpdate().then(launcherResult, () => undefined);
     }, 4 * 60 * 60 * 1000);
     return () => window.clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -244,8 +235,10 @@ export function App() {
     setBusy(kind);
     setProblem(null);
     try {
+      const epoch = authEpoch.current;
       const next = await action();
-      setOverview(next);
+      if (epoch === authEpoch.current && !signingOut.current) setOverview(next);
+      if (kind === "sync") guild.refresh(true);
       return next;
     } catch (e) {
       if (!quiet) setProblem(message(e));
@@ -268,6 +261,16 @@ export function App() {
     }
   };
 
+  useEffect(() => {
+    if (!inTauri) return;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    import("@tauri-apps/api/event").then(({ listen }) => listen<UpdateProgress>("launcher-update-progress", ({ payload }) => {
+      setLaunchProgress(payload); setUpdatingLauncher(payload.stage !== "failed");
+    })).then(stop => { if (disposed) stop(); else unlisten = stop; });
+    return () => { disposed = true; unlisten?.(); };
+  }, []);
+
   const installAddon = async () => {
     setAddonNote(null);
     const after = await act("addon", api.updateAddon);
@@ -276,6 +279,10 @@ export function App() {
 
   const events = useMemo(() => serverEvents ?? officialEvents(overview?.notices ?? []), [serverEvents, overview?.notices]);
   const adventureList = useMemo(() => adventures(serverAdventures ?? overview?.notices ?? [], now), [serverAdventures, overview?.notices, now]);
+  useEffect(() => {
+    const next = signedInNow ? events.find(n => !n.cancelled && n.start > now) : null;
+    api.updateTray(next ? "Next event: " + next.title : null).catch(() => undefined);
+  }, [events, signedInNow, now]);
   useEffect(() => {
     if (import.meta.env.DEV && new URLSearchParams(location.search).get("view") === "news") setPage("news");
   }, []);
@@ -287,21 +294,34 @@ export function App() {
     setGuide(forced || (!setupDone() && !(ready.folder && ready.addon && ready.account)));
   }, [overview, guide]);
 
-  if (!overview) return <div className="frame is-loading" />;
+  if (!overview) return (
+    <div className="frame is-loading">
+      <header className="titlebar" data-tauri-drag-region>
+        <img className="titlebar-crest" src={crest} alt="" data-tauri-drag-region />
+        <span className="titlebar-name" data-tauri-drag-region>Emberlight <span className="titlebar-sub" data-tauri-drag-region>Companion</span></span>
+        <span className="titlebar-space" data-tauri-drag-region />
+        <WindowButtons />
+      </header>
+      <img src={crest} alt="" width="64" height="64" />
+      <p role="status">{problem ? "Could not open Emberlight Companion." : "Opening Emberlight Companion…"}</p>
+      {problem && <><p className="loading-problem">{problem}</p><button className="btn" onClick={refresh}>Try again</button></>}
+    </div>
+  );
   const { wow, signedIn, settings, lastSync } = overview;
 
   const cold = !wow.root || !!wow.problem;
   const needsSetup = cold || !overview.addon.installed || !signedIn;
   const inGame = overview.watching || wow.gameRunning;
   const mood: LanternMood = busy === "play" ? "busy" : inGame ? "ingame" : cold ? "cold" : "lit";
-  const label = busy === "play" ? "Starting" : inGame ? "In game" : "Play";
+  const waiting = overview.launchState === "waiting" || overview.launchState === "starting";
+  const label = busy === "play" || overview.launchState === "starting" ? "Starting the game" : inGame ? "In game" : waiting ? "Waiting for the game" : overview.launchProblem ? "Try again" : "Play";
   const hint = cold
     ? "Choose your World of Warcraft folder in Settings."
     : !overview.addon.installed && !inGame
       ? "The Emberlight addon is not installed in this game version."
       : null;
 
-  const road: RoadState = !signedIn ? "dark" : busy ? "syncing" : lastSync?.error ? "error" : lastSync ? "synced" : "idle";
+  const road: RoadState = !signedIn ? "dark" : busy === "sync" || busy === "play" ? "syncing" : lastSync?.error ? "error" : lastSync ? "synced" : "idle";
   const syncLine = busy === "addon"
     ? "Checking the addon"
     : busy === "sync" || busy === "play"
@@ -309,11 +329,12 @@ export function App() {
       : !signedIn
         ? "Not signed in"
         : lastSync?.error
-          ? `Sync failed. ${lastSync.error}`
+          ? "Could not sync"
           : lastSync
             ? `Synced at ${syncedAt(lastSync.at)}`
             : "Not synced yet";
-  const note = !busy && signedIn && !lastSync?.error ? lastSync?.note ?? (lastSync?.rejected.length ? `${lastSync.rejected.length} notice(s) were not accepted.` : null) : null;
+  const recovery = syncRecovery(lastSync);
+  const note = !busy && signedIn && !lastSync?.error ? lastSync?.note ?? (lastSync?.rejected.length ? `${lastSync.rejected.length} update${lastSync.rejected.length === 1 ? " was" : "s were"} not accepted.` : null) : null;
   const planned = events.filter((n) => !n.cancelled).length;
   // A mark on Characters only when something needs a look: a refusal, or a request still waiting.
   const characterMark = characters?.mine.some((c) => c.status === "refused")
@@ -322,26 +343,27 @@ export function App() {
       ? "pending"
       : null;
 
-  const play = () => (cold ? openSettings() : inGame || busy === "addon" ? undefined : act("play", api.play));
+  const play = () => (cold ? openSettings() : inGame || busy || waiting ? undefined : act("play", api.play));
   const openNews = (id: string | null) => {
     setNewsId(id);
     setPage("news");
   };
 
   return (
-    <div className="frame">
+    <div className={`frame${!foreground || inGame ? " is-resting" : ""}`}>
       <header className="titlebar" data-tauri-drag-region>
         <img className="titlebar-crest" src={crest} alt="" data-tauri-drag-region />
         <span className="titlebar-name" data-tauri-drag-region>
-          Emberlight <span className="titlebar-sub">Companion</span>
+          Emberlight <span className="titlebar-sub" data-tauri-drag-region>Companion</span>
         </span>
         <span className="titlebar-space" data-tauri-drag-region />
+        <time className="server-clock" data-tauri-drag-region title="Guild server time, Europe/Paris">{fmtTime.format(now * 1000)} <span data-tauri-drag-region>server time</span></time>
         {!guide && (
           <div className="titlebar-account">
             {signedIn ? (
               <>
                 <span className="titlebar-member">{settings.memberName ?? "Signed in"}</span>
-                <button className="titlebar-button" onClick={titleSignOut}>
+                <button className="titlebar-button" onClick={() => titleSignOut().catch(e => setProblem(message(e)))}>
                   Sign out
                 </button>
               </>
@@ -350,40 +372,32 @@ export function App() {
                 Cancel sign-in
               </button>
             ) : (
-              <button className="titlebar-button is-primary" disabled={!settings.server} onClick={titleSignIn}>
+              <button className="titlebar-button is-primary" disabled={signingOut.current || !settings.server} onClick={titleSignIn}>
                 Sign in with Discord
               </button>
             )}
           </div>
         )}
-        <button className="stud" aria-label="Minimise" onClick={() => windowAction("minimize")}>
-          <svg viewBox="0 0 12 12" aria-hidden="true">
-            <path d="M2.5 6.5 H9.5" />
-          </svg>
-        </button>
-        <button className="stud" aria-label="Close" onClick={() => (inTauri ? api.closeWindow() : undefined)}>
-          <svg viewBox="0 0 12 12" aria-hidden="true">
-            <path d="M3 3 L9 9 M9 3 L3 9" />
-          </svg>
-        </button>
+        <WindowButtons />
       </header>
 
       {guide ? (
-        <Welcome overview={overview} onUpdate={setOverview} characters={characters} onDone={() => setGuide(false)} />
+        <Welcome overview={overview} onUpdate={applyOverview} characters={characters} onDone={() => setGuide(false)} />
       ) : (
         <>
       <aside className="side">
         <Scene road={road} />
-        <nav className="rail-nav" aria-label="Pages">
+        <div className="side-pages"><nav className="rail-nav" aria-label="Pages">
           {PAGES.map(([id, name]) => (
             <button key={id} className={`rail-nav-item${page === id ? " is-current" : ""}`} aria-current={page === id ? "page" : undefined} onClick={() => setPage(id)}>
               <svg viewBox="0 0 20 20" aria-hidden="true">
                 <path d={ICONS[id]} />
               </svg>
               <span>{name}</span>
+              {id === "news" && news.items?.some(isUnread) && <span className="rail-dot" role="img" aria-label="Unread announcements" />}
               {id === "events" && planned > 0 && <span className="tab-count">{planned}</span>}
               {id === "characters" && characterMark && (
-                <span className={`rail-dot${characterMark === "refused" ? " is-problem" : ""}`} title={characterMark === "refused" ? "A request was not approved" : "Waiting for an officer"} />
+                <span className={`rail-dot${characterMark === "refused" ? " is-problem" : ""}`} role="img" aria-label={characterMark === "refused" ? "A request was not approved" : "Waiting for an officer"} title={characterMark === "refused" ? "A request was not approved" : "Waiting for an officer"} />
               )}
             </button>
           ))}
@@ -400,33 +414,42 @@ export function App() {
           onInstall={installAddon}
           onSettings={openSettings}
           launcherUpdate={launcherUpdate}
+          launcherChecked={launcherChecked}
           updatingLauncher={updatingLauncher}
+          updateProgress={launchProgress}
           onUpdateLauncher={installLauncher}
         />
-        <div className="hearth">
-          <Lantern mood={mood} label={label} hint={hint} onPress={play} />
-          <div className="status" role="status" aria-live="polite">
-            <p className={`status-sync${lastSync?.error && !busy ? " is-problem" : ""}`}>{syncLine}</p>
-            {note && <p className="status-note">{note}</p>}
-            {addonNote && !busy && <p className="status-note">{addonNote}</p>}
-            {problem && <p className="status-note is-problem">{problem}</p>}
+        </div><div className="hearth">
+          <Lantern mood={mood} label={label} hint={hint} onPress={play} disabled={!!busy || !!inGame || waiting} active={foreground && !inGame} />
+          <div className={`status status-${road}`}>
+            <p className="status-caption">Guild sync</p>
+            <p role="status" className={`status-sync${lastSync?.error && !busy && signedIn ? " is-problem" : ""}`}>{syncLine}</p>
+            {signedIn && lastSync?.error && !busy && <details className="status-details"><summary>Error details</summary><p tabIndex={0}>{lastSync.error}</p></details>}
+            {signedIn && !!lastSync?.rejected.length && !busy && <details className="status-details"><summary>Updates needing attention</summary>{lastSync.rejected.map((reason, index) => <p key={index} tabIndex={0}>{reason}</p>)}</details>}
+            {!busy && signedIn && <p className="status-note">{syncSummary(lastSync)}</p>}
+            {overview.launchProblem && !busy && <p className="status-note is-problem" role="alert">{overview.launchProblem}</p>}
+            {note && <p role="status" className="status-note">{note}</p>}
+            {addonNote && !busy && <p role="status" className="status-note">{addonNote}</p>}
+            {problem && <details className="status-details is-problem" open><summary>Action failed</summary><p role="alert" tabIndex={0}>{problem}</p></details>}
             {signedIn && (
               <p className="status-actions">
-                <button className="link" disabled={!!busy} onClick={() => act("sync", api.syncNow)}>
-                  Sync now
+                <button className="link" disabled={!!busy} onClick={() => lastSync?.error || lastSync?.rejected.length ? recovery === "signin" ? titleSignIn() : recovery === "characters" ? setPage("characters") : act("sync", api.syncNow) : act("sync", api.syncNow)}>
+                  {lastSync?.error || lastSync?.rejected.length ? recovery === "signin" ? "Sign in again" : recovery === "characters" ? "Check your characters" : "Try again" : "Sync now"}
                 </button>
               </p>
             )}
+            {!signedIn && <button className="link" disabled={signingOut.current || signingIn || !settings.server} onClick={titleSignIn}>{signingIn ? "Signing in…" : "Sign in with Discord"}</button>}
           </div>
         </div>
       </aside>
 
       <main className="hall">
         <div className="topbar">
-          <h1>
+          <div><h1>
             {PAGE_NAME[page]}
             {page === "events" && planned > 0 && <span className="tab-count">{planned}</span>}
           </h1>
+          <p className="page-description">{PAGE_DESCRIPTION[page]}</p></div>
         </div>
         <div className="hall-page" key={page}>
           {page === "home" && (needsSetup ? (
@@ -438,7 +461,7 @@ export function App() {
                 {cold ? "The game folder is not set." : !overview.addon.installed ? "The Emberlight addon is not installed." : "You are not signed in."} The guide
                 takes you through what is left.
               </p>
-              <button className="btn" onClick={() => setGuide(true)}>
+              <button className="btn" disabled={signingOut.current} onClick={() => setGuide(true)}>
                 Continue setup
               </button>
             </div>
@@ -450,8 +473,9 @@ export function App() {
               signedIn={signedIn}
               announcements={news.items}
               newsProblem={news.problem}
-              onRead={openEvent}
+              onRead={setSelectedEvent}
               onNews={openNews}
+              isUnread={isUnread}
               onEvents={(which) => {
                 setEventsView(which);
                 setPage("events");
@@ -465,21 +489,24 @@ export function App() {
               events={eventsView === "guild" ? events : adventureList}
               now={now}
               signedIn={signedIn}
-              onRead={openEvent}
+              onRead={setSelectedEvent}
             />
           )}
-          {page === "characters" && <Characters characters={characters} signedIn={signedIn} />}
-          {page === "news" && <NewsReader items={news.items} signedIn={signedIn} problem={news.problem} selected={newsId} onOpen={setNewsId} />}
+          {page === "characters" && <Characters characters={characters} signedIn={signedIn} problem={charactersProblem} onRetry={() => guild.refresh(true)} />}
+          {page === "news" && <NewsReader items={news.items} signedIn={signedIn} problem={news.problem} selected={newsId} onOpen={setNewsId} isUnread={isUnread} onViewed={markRead} />}
           {page === "settings" && (
             <Settings
               overview={overview}
-              onUpdate={setOverview}
+              onUpdate={applyOverview}
               launcherUpdate={launcherUpdate}
-              onLauncherUpdate={setLauncherUpdate}
+              onLauncherUpdate={launcherResult}
+              onSignOut={titleSignOut}
+              updateProgress={launchProgress}
             />
           )}
         </div>
       </main>
+      {selectedEvent && <EventDetails event={selectedEvent} onClose={() => setSelectedEvent(null)} />}
         </>
       )}
     </div>

@@ -202,8 +202,10 @@ fn main() -> Result<()> {
         Command::InstallAddon { server, target, release_key } => {
             let addons = target.addons_ready()?;
             let key = release_key.as_deref().unwrap_or(update::RELEASE_PUBLIC_KEY);
-            let flavor = target.addons.is_none().then_some(target.flavor.as_str());
-            match update::check_and_install(&server, &addons, flavor, key, env!("CARGO_PKG_VERSION"))? {
+            // The game folder's tags (its name, and "forever" for WoW: Forever), unless an AddOns
+            // folder was given directly.
+            let tags = target.addons.is_none().then(|| addons.parent().and_then(Path::parent).map(paths::folder_tags).unwrap_or_default());
+            match update::check_and_install(&server, &addons, tags.as_deref(), key, env!("CARGO_PKG_VERSION"))? {
                 update::Outcome::UpToDate(v) => println!("Emberlight {v} is up to date."),
                 update::Outcome::NotPublished => println!("No Emberlight release is published yet; nothing was changed."),
                 update::Outcome::Installed(i) => match i.previous {

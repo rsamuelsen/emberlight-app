@@ -1,6 +1,8 @@
-import { useState } from "react";
-import { api, DEFAULT_SERVER, flavorName, inTauri, type LauncherUpdate, type Overview } from "./api";
-import { notificationsOn, setNotificationsOn } from "./notifications";
+import { useEffect, useState } from "react";
+import { api, DEFAULT_SERVER, flavorName, foreverFlavors, inTauri, type LauncherUpdate, type UpdateProgress, type Overview } from "./api";
+import { notificationSettings, setNotificationSettings, type NotificationSettings } from "./notifications";
+import { bugReport } from "./bugReport";
+import { UpdateProgressView } from "./UpdateProgress";
 
 const message = (e: unknown) => (typeof e === "string" ? e : e instanceof Error ? e.message : "Something went wrong.");
 
@@ -9,10 +11,12 @@ interface Props {
   onUpdate: (o: Overview) => void;
   launcherUpdate: LauncherUpdate | null;
   onLauncherUpdate: (u: LauncherUpdate | null) => void;
+  onSignOut: () => Promise<Overview>;
+  updateProgress: UpdateProgress | null;
 }
 
 /** One page: Discord, the game, the addon and the Companion itself. Characters have their own tab. */
-export function Settings({ overview, onUpdate, launcherUpdate, onLauncherUpdate }: Props) {
+export function Settings({ overview, onUpdate, launcherUpdate, onLauncherUpdate, onSignOut, updateProgress }: Props) {
   const { settings, wow, signedIn, addon, lastAddonCheck } = overview;
   const [wowRoot, setWowRoot] = useState(settings.wowRoot ?? "");
   const [server, setServer] = useState(settings.server);
@@ -21,7 +25,16 @@ export function Settings({ overview, onUpdate, launcherUpdate, onLauncherUpdate 
   const [busy, setBusy] = useState<string | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
-  const [notify, setNotify] = useState(notificationsOn);
+  const [notify, setNotify] = useState(notificationSettings);
+  const [autostart, setAutostart] = useState(false);
+  const [autostartRead, setAutostartRead] = useState(false);
+  useEffect(() => { api.desktopSettings().then(value => { setAutostart(value); setAutostartRead(true); }, e => setProblem(message(e))); }, []);
+  const notificationChange = (next: NotificationSettings) => { setNotificationSettings(next); setNotify(next); };
+  const report = bugReport(overview);
+  const copyDetails = async () => {
+    try { await navigator.clipboard.writeText(report); setDone("Details copied. Account names, IDs and tokens are left out."); }
+    catch { setDone("Select the details below and copy them."); }
+  };
 
   async function run<T>(what: string, action: () => Promise<T>, apply: (v: T) => void, doneText?: string) {
     setBusy(what);
@@ -42,7 +55,7 @@ export function Settings({ overview, onUpdate, launcherUpdate, onLauncherUpdate 
   const save = (root: string, flavor: string, address: string) => run("save", () => api.saveSettings(root || null, flavor, address), onUpdate, "Saved.");
   const rootDirty = wowRoot !== (settings.wowRoot ?? "");
   const serverDirty = server.trim().replace(/\/+$/, "") !== settings.server;
-  const flavors = wow.flavors.includes(settings.flavor) ? wow.flavors : [settings.flavor, ...wow.flavors];
+  const flavors = foreverFlavors(wow);
 
   async function choose() {
     const { open } = await import("@tauri-apps/plugin-dialog");
@@ -70,7 +83,7 @@ export function Settings({ overview, onUpdate, launcherUpdate, onLauncherUpdate 
                     <strong>{settings.memberName ?? "Guild member"}</strong>
                     {settings.discordId && <small>Discord ID {settings.discordId}</small>}
                   </p>
-                  <button className="btn btn-small" disabled={!!busy} onClick={() => run("signout", api.signOut, onUpdate)}>
+                  <button className="btn btn-small" disabled={!!busy} onClick={() => run("signout", onSignOut, onUpdate)}>
                     Sign out
                   </button>
                 </>
@@ -102,7 +115,7 @@ export function Settings({ overview, onUpdate, launcherUpdate, onLauncherUpdate 
               <small>{wow.root && !wow.problem ? "Found" : wow.problem ?? "Not found"}</small>
             </div>
             <div className="set-control">
-              <input value={wowRoot} onChange={(e) => setWowRoot(e.target.value)} placeholder={wow.root ?? "Not found"} spellCheck={false} />
+              <input aria-label="Game folder" value={wowRoot} onChange={(e) => setWowRoot(e.target.value)} placeholder={wow.root ?? "Not found"} spellCheck={false} />
               {inTauri && (
                 <button className="btn btn-small" disabled={!!busy} onClick={choose}>
                   Choose
@@ -118,22 +131,13 @@ export function Settings({ overview, onUpdate, launcherUpdate, onLauncherUpdate 
           <div className="set-row">
             <div className="set-label">Game version</div>
             <div className="set-control">
-              <select value={settings.flavor} disabled={!!busy} onChange={(e) => save(wowRoot, e.target.value, settings.server)}>
-                {flavors.map((f) => (
+              <select aria-label="Game version" value={settings.flavor} disabled={!!busy || !flavors.length} onChange={(e) => save(wowRoot, e.target.value, settings.server)}>
+                {(flavors.length ? flavors : ["_forever_"]).map((f) => (
                   <option key={f} value={f}>
-                    {flavorName(f)}
+                    {flavorName(f, wow.forever)}
                   </option>
                 ))}
               </select>
-            </div>
-          </div>
-          <div className="set-row">
-            <div className="set-label">
-              Game accounts on this computer
-              <small>Found in your game folder. Emberlight reads your characters and the addon's saved data from these.</small>
-            </div>
-            <div className="set-control">
-              <p className="set-text">{wow.accounts.length ? wow.accounts.join(", ") : "None yet. Log in once with the addon enabled."}</p>
             </div>
           </div>
         </section>
@@ -215,23 +219,14 @@ export function Settings({ overview, onUpdate, launcherUpdate, onLauncherUpdate 
                   <small>Closing the window keeps Emberlight Companion running beside the clock, for notifications and updates. Quit from its tray icon.</small>
                 </span>
               </label>
-              <label className="set-check">
-                <input
-                  type="checkbox"
-                  checked={notify}
-                  onChange={(e) => {
-                    setNotificationsOn(e.target.checked);
-                    setNotify(e.target.checked);
-                  }}
-                />
-                <span>
-                  Windows notifications
-                  <small>A new guild event, and an event you said you will join an hour before it starts. Only while Emberlight Companion is running.</small>
-                </span>
-              </label>
+              <label className="set-check"><input type="checkbox" checked={autostart} disabled={!!busy || !autostartRead} onChange={e => run("autostart", () => api.setAutostart(e.target.checked), setAutostart)} /><span>Start with Windows (quietly in the tray)<small>Off until you choose it. The Companion starts without opening its window.</small></span></label>
+              <label className="set-check"><input type="checkbox" checked={notify.newEvents} onChange={e => notificationChange({ ...notify, newEvents: e.target.checked })} /><span>New guild event alerts<small>When an officer posts a new guild event.</small></span></label>
+              <label className="set-check"><input type="checkbox" checked={notify.myReminders} onChange={e => notificationChange({ ...notify, myReminders: e.target.checked })} /><span>My event reminders<small>Only for events you said you will join, while the Companion is running.</small></span></label>
+              <label className="reminder-time">Remind me <select aria-label="Reminder time" value={notify.reminderMinutes} disabled={!notify.myReminders} onChange={e => notificationChange({ ...notify, reminderMinutes: +e.target.value as 15 | 60 })}><option value={15}>15 minutes before</option><option value={60}>1 hour before</option></select></label>
+              <UpdateProgressView progress={updateProgress} />
               <div className="set-actions">
                 {launcherUpdate ? (
-                  <button className="btn btn-small" disabled={!!busy || overview.watching} onClick={() => run("launcher", () => api.installLauncherUpdate(), () => undefined)}>
+                  <button className="btn btn-small" disabled={!!busy || overview.watching || wow.gameRunning || overview.launchState === "waiting" || overview.launchState === "starting"} onClick={() => run("launcher", () => api.installLauncherUpdate(), () => undefined)}>
                     {busy === "launcher" ? "Updating" : "Restart to update"}
                   </button>
                 ) : (
@@ -253,6 +248,22 @@ export function Settings({ overview, onUpdate, launcherUpdate, onLauncherUpdate 
           </div>
         </section>
 
+        <section className="set-section"><h2>Help</h2><p className="set-intro">Copy a short summary if you need help. Nothing is sent by this button.</p>
+          <button className="btn" onClick={copyDetails}>Copy details for a bug report</button>
+          <details className="support-details"><summary>Details on this computer</summary><pre tabIndex={0}>{report}</pre>
+          <div className="set-row">
+            <div className="set-label">
+              Game accounts on this computer
+              <small>Found in your game folder. Emberlight reads your characters and the addon's saved data from these.</small>
+            </div>
+            <div className="set-control">
+              <p className="set-text">{wow.accounts.length ? wow.accounts.join(", ") : "None yet. Log in once with the addon enabled."}</p>
+            </div>
+          </div>
+
+          <p className="set-note">Game account names are shown only here and are not copied. Personal folder paths and identifying error details are left out of the report.</p></details>
+        </section>
+
         {/* The guild owns its server address (emberlightrp.com), so members never change it: the server
             address and the sign-in code for a development server are only offered in development builds. */}
         {import.meta.env.DEV && (
@@ -265,7 +276,7 @@ export function Settings({ overview, onUpdate, launcherUpdate, onLauncherUpdate 
                 <small>The guild's server.</small>
               </div>
               <div className="set-control">
-                <input value={server} onChange={(e) => setServer(e.target.value)} placeholder={DEFAULT_SERVER} spellCheck={false} />
+                <input aria-label="Server address" value={server} onChange={(e) => setServer(e.target.value)} placeholder={DEFAULT_SERVER} spellCheck={false} />
                 {serverDirty && (
                   <button className="btn btn-small" disabled={!!busy} onClick={() => save(wowRoot, settings.flavor, server)}>
                     Save

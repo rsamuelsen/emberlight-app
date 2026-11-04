@@ -7,16 +7,26 @@ interface Props {
   label: string;
   hint: string | null;
   onPress: () => void;
+  disabled: boolean;
+  active: boolean;
 }
 
 const reducedMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 /** Embers rising from the lantern's chimney. Small canvas, 30 fps, paused when hidden. */
-function useEmbers(canvas: React.RefObject<HTMLCanvasElement | null>, rate: React.RefObject<number>) {
+function useEmbers(canvas: React.RefObject<HTMLCanvasElement | null>, rate: React.RefObject<number>, active: boolean) {
+  const [reduce, setReduce] = useState(reducedMotion);
+  useEffect(() => {
+    const preference = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const changed = () => setReduce(preference.matches);
+    preference.addEventListener("change", changed);
+    return () => preference.removeEventListener("change", changed);
+  }, []);
   useEffect(() => {
     const el = canvas.current;
     const ctx = el?.getContext("2d");
-    if (!el || !ctx || reducedMotion()) return;
+    if (!el || !ctx) return;
+    if (reduce || !active) { ctx.clearRect(0, 0, el.width, el.height); return; }
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const w = el.clientWidth;
     const h = el.clientHeight;
@@ -73,15 +83,15 @@ function useEmbers(canvas: React.RefObject<HTMLCanvasElement | null>, rate: Reac
     };
     frame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frame);
-  }, [canvas, rate]);
+  }, [canvas, rate, reduce, active]);
 }
 
-export function Lantern({ mood, label, hint, onPress }: Props) {
+export function Lantern({ mood, label, hint, onPress, disabled, active }: Props) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const [hover, setHover] = useState(false);
   const rate = useRef(0);
   rate.current = mood === "cold" ? 0 : mood === "busy" ? 1.6 : hover ? 0.9 : 0.3;
-  useEmbers(canvas, rate);
+  useEmbers(canvas, rate, active);
 
   return (
     <div className={`lantern mood-${mood}${hover ? " is-hover" : ""}`}>
@@ -89,6 +99,7 @@ export function Lantern({ mood, label, hint, onPress }: Props) {
       <canvas ref={canvas} className="lantern-embers" />
       <button
         className="lantern-button"
+        disabled={disabled}
         onClick={onPress}
         onMouseEnter={() => setHover(true)}
         onMouseLeave={() => setHover(false)}

@@ -123,6 +123,66 @@ pub fn flavor_dir(root: &Path, flavor: &str) -> Result<PathBuf> {
     Ok(dir)
 }
 
+/// The Battle.net product a game folder belongs to (`wow`, `wow_classic_beta`, ...), from the
+/// `.flavor.info` file Battle.net keeps in every game folder: a header line, then the product.
+pub fn game_product(flavor_dir: &Path) -> Option<String> {
+    let text = fs::read_to_string(flavor_dir.join(".flavor.info")).ok()?;
+    text.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.contains('!'))
+        .find(|l| l.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'))
+        .map(str::to_owned)
+}
+
+/// The game version Battle.net installed for `product` ("1.60.1.70755"), from the `.build.info`
+/// table in the World of Warcraft folder: `|`-separated, the first line naming the columns
+/// ("Version!STRING:0", "Product!STRING:0").
+pub fn game_version(root: &Path, product: &str) -> Option<String> {
+    let text = fs::read_to_string(root.join(".build.info")).ok()?;
+    let mut lines = text.lines();
+    let columns: Vec<String> = lines.next()?.split('|').map(|c| c.split('!').next().unwrap_or("").trim().to_ascii_lowercase()).collect();
+    let version = columns.iter().position(|c| c == "version")?;
+    let product_at = columns.iter().position(|c| c == "product")?;
+    lines.map(|l| l.split('|').map(str::trim).collect::<Vec<_>>()).find_map(|row| {
+        (row.get(product_at) == Some(&product)).then(|| row.get(version).map(|v| (*v).to_owned())).flatten()
+    })
+}
+
+/// WoW: Forever's game version starts with 1.60 (interface 16001 is 1.60.1).
+pub const FOREVER_VERSION: &str = "1.60.";
+
+/// Whether a game folder is WoW: Forever (the beta or the real game). The folder name of the real
+/// game was not known before launch, so it is recognised by what Battle.net says about it: a
+/// product named "forever", or a 1.60 game version.
+pub fn is_forever(flavor_dir: &Path) -> bool {
+    if flavor_dir.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.contains("forever")) {
+        return true;
+    }
+    let Some(product) = game_product(flavor_dir) else { return false };
+    if product.contains("forever") {
+        return true;
+    }
+    let root = flavor_dir.parent().unwrap_or(flavor_dir);
+    game_version(root, &product).is_some_and(|v| v.starts_with(FOREVER_VERSION))
+}
+
+/// Whether a game folder is a test client (beta or test realm) rather than a released game.
+pub fn is_test_client(flavor_dir: &Path) -> bool {
+    let name = flavor_dir.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    let product = game_product(flavor_dir).unwrap_or_default();
+    ["beta", "ptr"].iter().any(|t| name.contains(t) || product.contains(t)) || product.ends_with("_t")
+}
+
+/// The words an addon release can name to allow a game folder: the folder's own name, and
+/// "forever" when the folder is WoW: Forever whatever its name.
+pub fn folder_tags(flavor_dir: &Path) -> Vec<String> {
+    let mut tags: Vec<String> = flavor_dir.file_name().and_then(|n| n.to_str()).map(str::to_owned).into_iter().collect();
+    if is_forever(flavor_dir) {
+        tags.push("forever".into());
+    }
+    tags
+}
+
 pub fn addons_dir(flavor_dir: &Path) -> PathBuf {
     flavor_dir.join("Interface").join("AddOns")
 }
@@ -209,16 +269,52 @@ mod tests {
         assert_eq!(found, vec!["123456#1", "WOW1"]);
     }
 
+    fn game_folder(root: &Path, name: &str, product: &str) -> PathBuf {
+        let dir = root.join(name);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(".flavor.info"), format!("Product Flavor!STRING:0\n{product}\n")).unwrap();
+        dir
+    }
+
+    #[test]
+    fn recognises_forever_by_what_battle_net_says() {
+        let root = tempfile::tempdir().unwrap();
+        let retail = game_folder(root.path(), "_retail_", "wow");
+        let beta = game_folder(root.path(), "_classic_beta_", "wow_classic_beta");
+        let live = game_folder(root.path(), "_newname_", "wow_newproduct");
+        let mop = game_folder(root.path(), "_classic_", "wow_classic");
+        fs::write(
+            root.path().join(".build.info"),
+            "Branch!STRING:0|Active!DEC:1|Build Key!HEX:16|Version!STRING:0|Product!STRING:0\n\
+             eu|1|aa|12.1.5.66000|wow\n\
+             eu|1|bb|1.60.1.70450|wow_classic_beta\n\
+             eu|1|cc|1.60.1.70755|wow_newproduct\n\
+             eu|1|dd|5.5.3.65000|wow_classic\n",
+        )
+        .unwrap();
+        assert_eq!(game_product(&live).as_deref(), Some("wow_newproduct"));
+        assert_eq!(game_version(root.path(), "wow_newproduct").as_deref(), Some("1.60.1.70755"));
+        assert!(is_forever(&beta) && is_forever(&live));
+        assert!(!is_forever(&retail) && !is_forever(&mop));
+        assert!(is_test_client(&beta) && !is_test_client(&live));
+        assert_eq!(folder_tags(&live), vec!["_newname_", "forever"]);
+        assert_eq!(folder_tags(&retail), vec!["_retail_"]);
+        // Named after Forever, or with no Battle.net files at all.
+        assert!(is_forever(&game_folder(root.path(), "_forever_", "x")));
+        fs::create_dir_all(root.path().join("_bare_")).unwrap();
+        assert!(!is_forever(&root.path().join("_bare_")));
+    }
+
     #[test]
     fn finds_character_folders() {
         let root = tempfile::tempdir().unwrap();
         let account = root.path().join("WTF/Account");
-        for dir in ["WOW1/Stormrage/Hazard", "WOW1/Argent Dawn/Mira", "WOW1/Azjol-Nerub/Tom", "WOW2/Stormrage/Hazard", "WOW1/SavedVariables/NotACharacter", "WOW1/EmptyRealm"] {
+        for dir in ["WOW1/Stormrage/Alice", "WOW1/Argent Dawn/Mira", "WOW1/Azjol-Nerub/Tom", "WOW2/Stormrage/Alice", "WOW1/SavedVariables/NotACharacter", "WOW1/EmptyRealm"] {
             fs::create_dir_all(account.join(dir)).unwrap();
         }
         fs::write(account.join("WOW1/Stormrage/a-file.txt"), "").unwrap();
         fs::write(account.join("WOW1/config-cache.wtf"), "").unwrap();
-        assert_eq!(character_folders(root.path()), vec!["Hazard-Stormrage", "Mira-ArgentDawn", "Tom-AzjolNerub"]);
+        assert_eq!(character_folders(root.path()), vec!["Alice-Stormrage", "Mira-ArgentDawn", "Tom-AzjolNerub"]);
         assert!(character_folders(&root.path().join("missing")).is_empty());
     }
 }

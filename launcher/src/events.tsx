@@ -1,14 +1,30 @@
 import { useEffect, useState } from "react";
 import { openInBrowser, WEBSITE, type Notice } from "./api";
 
-// English wording to match the rest of the app; times are shown in the player's own time zone.
-export const fmtWhen = new Intl.DateTimeFormat("en-GB", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
-export const fmtLong = new Intl.DateTimeFormat("en-GB", { weekday: "long", day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" });
-export const fmtTime = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit" });
-export const fmtWeekday = new Intl.DateTimeFormat("en-GB", { weekday: "short" });
-export const fmtWeekdayLong = new Intl.DateTimeFormat("en-GB", { weekday: "long" });
-export const fmtMonth = new Intl.DateTimeFormat("en-GB", { month: "short" });
-export const fmtDayMonth = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "long" });
+export const SERVER_TIME_ZONE = "Europe/Paris";
+// Match the guild website: dates, grouping and countdowns all use the realm clock.
+export const fmtWhen = new Intl.DateTimeFormat("en-GB", { timeZone: SERVER_TIME_ZONE, weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+export const fmtLong = new Intl.DateTimeFormat("en-GB", { timeZone: SERVER_TIME_ZONE, weekday: "long", day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" });
+export const fmtTime = new Intl.DateTimeFormat("en-GB", { timeZone: SERVER_TIME_ZONE, hour: "2-digit", minute: "2-digit" });
+export const fmtWeekday = new Intl.DateTimeFormat("en-GB", { timeZone: SERVER_TIME_ZONE, weekday: "short" });
+export const fmtWeekdayLong = new Intl.DateTimeFormat("en-GB", { timeZone: SERVER_TIME_ZONE, weekday: "long" });
+export const fmtMonth = new Intl.DateTimeFormat("en-GB", { timeZone: SERVER_TIME_ZONE, month: "short" });
+export const fmtDayMonth = new Intl.DateTimeFormat("en-GB", { timeZone: SERVER_TIME_ZONE, day: "numeric", month: "long" });
+
+export const fmtDateNumber = new Intl.DateTimeFormat("en-GB", { timeZone: SERVER_TIME_ZONE, day: "numeric" });
+const calendar = new Intl.DateTimeFormat("en-GB", { timeZone: SERVER_TIME_ZONE, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+const localCalendar = new Intl.DateTimeFormat("en-GB", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+const localTime = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+const localLong = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+const parts = (formatter: Intl.DateTimeFormat, at: number) => Object.fromEntries(formatter.formatToParts(at * 1000).filter(p => p.type !== "literal").map(p => [p.type, p.value]));
+export const serverDayKey = (at: number) => { const p = parts(calendar, at); return [p.year, p.month, p.day].join("-"); };
+export function serverWhen(at: number, full = false) {
+  const server = parts(calendar, at), local = parts(localCalendar, at);
+  const differs = ["year", "month", "day", "hour", "minute"].some(k => server[k] !== local[k]);
+  const otherDay = ["year", "month", "day"].some(k => server[k] !== local[k]);
+  return (full ? fmtLong : fmtTime).format(at * 1000) + " server time" + (differs ? " (" + (otherDay ? localLong : localTime).format(at * 1000) + " your time)" : "");
+}
+export const isGoing = (n: Notice) => !!n.ownReplies?.some(r => r.response === "I will join");
 
 export const displayName = (author: string) => author.split("-")[0];
 
@@ -34,20 +50,19 @@ export const adventureWhen = (n: Notice, now: number) => (n.start <= now ? "Happ
 export function useNow() {
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
   useEffect(() => {
-    const timer = window.setInterval(() => setNow(Math.floor(Date.now() / 1000)), 60_000);
-    return () => window.clearInterval(timer);
+    let timer: number;
+    const tick = () => { setNow(Math.floor(Date.now() / 1000)); timer = window.setTimeout(tick, 60_000 - Date.now() % 60_000 + 20); };
+    timer = window.setTimeout(tick, 60_000 - Date.now() % 60_000 + 20);
+    return () => window.clearTimeout(timer);
   }, []);
   return now;
 }
 
-const dayStart = (secs: number) => {
-  const d = new Date(secs * 1000);
-  d.setHours(0, 0, 0, 0);
-  return d.getTime() / 1000;
+/** Compare realm calendar dates, including Paris daylight-saving changes. */
+export const daysUntil = (start: number, now: number) => {
+  const day = (at: number) => { const p = parts(calendar, at); return Date.UTC(+p.year, +p.month - 1, +p.day) / 86400000; };
+  return day(start) - day(now);
 };
-
-/** Whole calendar days from today to the day of `start`. */
-export const daysUntil = (start: number, now: number) => Math.round((dayStart(start) - dayStart(now)) / 86400);
 
 /** "Under way", "In 40 minutes", "Tonight at 20:30", "Tomorrow at 19:00", "In 3 days". */
 export function countdown(start: number, now: number) {
@@ -55,8 +70,8 @@ export function countdown(start: number, now: number) {
   if (diff <= 0) return "Under way";
   if (diff < 3600) return `In ${Math.max(1, Math.round(diff / 60))} minutes`;
   const days = daysUntil(start, now);
-  const at = fmtTime.format(start * 1000);
-  if (days === 0) return new Date(start * 1000).getHours() >= 17 ? `Tonight at ${at}` : `Today at ${at}`;
+  const at = serverWhen(start);
+  if (days === 0) return +parts(calendar, start).hour >= 17 ? `Tonight at ${at}` : `Today at ${at}`;
   if (days === 1) return `Tomorrow at ${at}`;
   if (days < 14) return `In ${days} days`;
   return `In ${Math.round(days / 7)} weeks`;

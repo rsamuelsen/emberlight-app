@@ -28,22 +28,28 @@ if (params.has("still")) {
 }
 export const previewView = params.get("view");
 export const previewPage = params.get("page");
+export const previewCalls: Record<string, number> = {};
+Object.assign(window, { __emberlightPreviewCalls: previewCalls, __emberlightEditAnnouncement: (id: string) => previewEditAnnouncement(id) });
+export function previewEditAnnouncement(id: string) { const item = announcements.find(a => a.id === id); if (item) item.editedAt++; }
+let autostart = false;
+let failedLaunch = false;
 
 let state: Overview = {
-  settings: { wowRoot: "C:\\Program Files (x86)\\World of Warcraft", flavor: "_retail_", server: "http://127.0.0.1:8787", memberName: "Wayfarer", discordId: "123456789012345678", autoUpdateAddon: true, keepInTray: true },
+  settings: { wowRoot: "C:\\Program Files (x86)\\World of Warcraft", flavor: "_forever_", server: "http://127.0.0.1:8787", memberName: "Wayfarer", discordId: "123456789012345678", autoUpdateAddon: true, keepInTray: true },
   signedIn: true,
-  wow: { root: "C:\\Program Files (x86)\\World of Warcraft", problem: null, flavors: ["_retail_", "_classic_"], emberlight: "120100", accounts: ["WOW1"], gameRunning: false, running: [] },
-  addon: { installed: "0.6.0", previous: "0.5.0" },
-  lastAddonCheck: { at: now() - 600, message: "Emberlight 0.6.0 is up to date.", error: false, kind: "current", latest: "0.6.0" },
+  wow: { root: "C:\\Program Files (x86)\\World of Warcraft", problem: null, flavors: ["_forever_", "_classic_beta_", "_retail_", "_classic_"], forever: ["_forever_", "_classic_beta_"], emberlight: "16001, 120105, 120100", version: "1.60.1.70755", accounts: ["WOW1"], gameRunning: false, running: [] },
+  addon: { installed: "0.8.10", previous: "0.8.9" },
+  lastAddonCheck: { at: now() - 600, message: "Emberlight 0.8.10 is up to date.", error: false, kind: "current", latest: "0.8.10" },
   notices: sample,
   archiveWritten: now() - 600,
-  lastSync: { at: now() - 600, uploaded: 2, stored: 0, rejected: [], downloaded: 3, note: null, error: null },
+  lastSync: { at: now() - 60, uploaded: 2, stored: 0, rejected: [], downloaded: 3, note: null, error: null },
   watching: false,
-  launcherVersion: "0.1.0",
+  launcherVersion: "0.3.6",
+  launchState: "idle", launchProblem: null,
 };
 
 if (view === "fresh") {
-  state = { ...state, signedIn: false, notices: [], archiveWritten: null, lastSync: null, addon: { installed: null, previous: null }, lastAddonCheck: null, settings: { ...state.settings, wowRoot: null, server: "", memberName: null }, wow: { ...state.wow, root: null, problem: "World of Warcraft was not found in the usual place.", flavors: [], emberlight: null, accounts: [] } };
+  state = { ...state, signedIn: false, notices: [], archiveWritten: null, lastSync: null, addon: { installed: null, previous: null }, lastAddonCheck: null, settings: { ...state.settings, wowRoot: null, server: "", memberName: null }, wow: { ...state.wow, root: null, problem: "World of Warcraft was not found in the usual place.", flavors: [], forever: [], emberlight: null, accounts: [] } };
 }
 if (view === "empty") state = { ...state, notices: [] };
 if (view === "error") state = { ...state, lastSync: { ...state.lastSync!, error: "Could not reach the Emberlight server." } };
@@ -53,7 +59,8 @@ if (view === "update") {
   state = {
     ...state,
     settings: { ...state.settings, autoUpdateAddon: false },
-    lastAddonCheck: { at: now() - 60, message: "Emberlight 0.6.1 is ready to install.", error: false, kind: "available", latest: "0.6.1" },
+    addon: { installed: "0.8.9", previous: null },
+    lastAddonCheck: { at: now() - 60, message: "Emberlight 0.8.10 is ready to install.", error: false, kind: "available", latest: "0.8.10" },
   };
 }
 
@@ -90,6 +97,10 @@ let characters: CharactersView = {
   found: [{ firstName: "Bob", surname: null, name: "Bob", realm: "TestRealm" }],
 };
 
+if (view === "signedout") state = { ...state, signedIn: false };
+if (view === "not-synced") state = { ...state, watching: true, lastSync: null };
+if (view === "empty") { announcements = []; characters = { ...characters, mine: [], found: [] }; }
+if (view === "refused") characters = { ...characters, mine: [{ ...characters.mine[0], status: "refused", reason: "Please check the spelling of your character’s name." }] };
 if (view === "fresh") characters = { ...characters, mine: [], found: [{ firstName: "Bob", surname: null, name: "Bob", realm: "TestRealm" }] };
 
 // ?state=showcase: tidy example content for screenshots on the website (marked there as example).
@@ -128,9 +139,23 @@ if (view === "showcase") {
   state = { ...state, lastSync: { at: now() - 60, uploaded: 0, stored: 0, rejected: [], downloaded: 3, note: null, error: null } };
 }
 
+// Deliberately difficult data for local layout checks only.
+if (view === "stress") {
+  state = { ...state, notices: sample.map(n => ({ ...n, title: n.title + " with a very long title ".repeat(12), location: "A long location name ".repeat(15), body: "Long event details. ".repeat(100) })) };
+  announcements = Array.from({ length: 12 }, (_, i) => ({ ...announcements[i % 2], id: String(i), content: "# " + "An unusually long announcement title ".repeat(10) + "\n" + "A full paragraph for checking the reader. ".repeat(80) }));
+  characters = { ...characters, mine: Array.from({ length: 12 }, (_, i) => ({ ...characters.mine[0], id: i, name: "Alexanderthewayfarer".repeat(5), status: (["verified", "pending", "refused"] as const)[i % 3] })) };
+}
+
 export async function handle(cmd: string, args?: Record<string, unknown>): Promise<unknown> {
+  previewCalls[cmd] = (previewCalls[cmd] ?? 0) + 1;
   switch (cmd) {
+    case "desktop_settings": return autostart;
+    case "set_autostart": autostart = !!args?.on; return autostart;
+    case "update_tray":
+    case "notify": return;
     case "overview":
+      if (view === "startup-error") throw "Could not read the Companion settings.";
+      if (view === "signout-race") { const snapshot = structuredClone(state); await wait(1000); return snapshot; }
       return state;
     case "sync_now":
       await wait(view === "syncing" ? 1e9 : 2400);
@@ -139,7 +164,7 @@ export async function handle(cmd: string, args?: Record<string, unknown>): Promi
     case "update_addon":
       await wait(1500);
     {
-      const latest = state.lastAddonCheck?.latest ?? "0.6.0";
+      const latest = state.lastAddonCheck?.latest ?? "0.8.10";
       const changed = state.addon.installed !== latest;
       state = {
         ...state,
@@ -166,17 +191,24 @@ export async function handle(cmd: string, args?: Record<string, unknown>): Promi
       return state;
     case "launcher_update":
       await wait(600);
-      return view === "update" ? { version: "0.2.0", notes: "A bigger window and a new Settings page." } : null;
+      return view === "update" ? { version: "0.3.7", notes: "Desktop improvements." } : null;
     case "install_launcher_update":
       await wait(2000);
       throw "Preview only: the real app restarts into the new version here.";
     case "play":
       await wait(2000);
-      state = { ...state, watching: true };
+      state = { ...state, watching: false, launchState: "waiting", launchProblem: null };
+      window.setTimeout(() => {
+        if (view === "launch-failed" && !failedLaunch) {
+          failedLaunch = true;
+          state = { ...state, launchState: "failed", launchProblem: "World of Warcraft did not appear. Try again, or start it from Battle.net." };
+        } else state = { ...state, launchState: "ingame", watching: true, wow: { ...state.wow, gameRunning: true } };
+        window.dispatchEvent(new Event("focus"));
+      }, 1000);
       return state;
     case "save_settings":
       state = { ...state, settings: { ...state.settings, wowRoot: (args?.wowRoot as string) ?? null, flavor: args?.flavor as string, server: args?.server as string } };
-      if (args?.wowRoot) state = { ...state, wow: { ...state.wow, root: args.wowRoot as string, problem: null, flavors: ["_retail_", "_classic_"], accounts: ["WOW1"] } };
+      if (args?.wowRoot) state = { ...state, wow: { ...state.wow, root: args.wowRoot as string, problem: null, flavors: ["_forever_", "_classic_beta_", "_retail_", "_classic_"], forever: ["_forever_", "_classic_beta_"], accounts: ["WOW1"] } };
       return state;
     case "sign_in":
       await wait(800);
@@ -195,17 +227,22 @@ export async function handle(cmd: string, args?: Record<string, unknown>): Promi
       cancelled = true;
       return;
     case "announcements":
+      if (view === "offline") throw "Could not reach the Emberlight server.";
+      if (view === "loading") return new Promise(() => {});
       await wait(400);
       return view === "fresh" ? [] : announcements;
     case "guild_events":
+      if (view === "offline") throw "Could not reach the Emberlight server.";
       await wait(400);
       return state.notices
         .filter((n) => (args?.kind === "official" ? n.category === 4 : n.category !== 4) && !n.cancelled)
         .sort((a, b) => a.start - b.start)
-        .map((n) => ({ scope: n.scope, id: n.id, kind: (["", "expedition", "help", "rp", "official"] as const)[n.category], title: n.title, location: n.location || null, body: n.body, start: n.start, expires: n.expires, author: n.author, authorName: n.author.split("-")[0] }));
+        .map((n) => ({ scope: n.scope, id: n.id, kind: (["", "expedition", "help", "rp", "official"] as const)[n.category], title: n.title, location: n.location || null, body: n.body, start: n.start, expires: n.expires, author: n.author, authorName: n.author.split("-")[0], ownReplies: n.category === 4 && n.id === state.notices.find(n => n.category === 4)?.id ? [{ response: "I will join" }] : [] }));
     case "open_link":
       return;
     case "characters":
+      if (view === "offline") throw "Could not reach the Emberlight server.";
+      if (view === "loading") return new Promise(() => {});
       await wait(300);
       return characters;
     case "sign_out":

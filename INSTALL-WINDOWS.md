@@ -39,7 +39,9 @@ That's it. Press **Play** whenever you like.
   about new guild events. To quit, right-click the Emberlight icon there and choose **Quit**. You
   can change this in Settings.
 - When there's a new version, the Companion offers **Restart to update**. You never need to
-  download it again.
+  download it again, and it never installs itself without you pressing the button.
+- The Companion also keeps the addon up to date by itself while the game is closed. To turn that
+  off, clear **Update the addon by itself** in its Settings.
 - What it reads and sends: [PRIVACY.md](PRIVACY.md).
 - To remove it: Windows **Settings**, **Apps**, find **Emberlight Companion**, **Uninstall**.
 
@@ -49,8 +51,8 @@ You can use the addon without the Companion, on any computer:
 
 1. Download **[Emberlight-addon.zip](https://github.com/rsamuelsen/emberlight-app/releases/latest/download/Emberlight-addon.zip)**.
 2. Close World of Warcraft.
-3. Open your `World of Warcraft` folder, then the folder for the game version you play (during
-   the WoW: Forever beta that's `_classic_beta_`), then `Interface`, then `AddOns`. Create
+3. Open your `World of Warcraft` folder, then the folder for the game version you play (for
+   WoW: Forever that's `_forever_`), then `Interface`, then `AddOns`. Create
    `Interface` and `AddOns` if they aren't there.
 4. Right-click the zip, choose **Extract All**, and extract it into that `AddOns` folder. You should
    end up with `AddOns\Emberlight\Emberlight.toc`.

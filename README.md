@@ -19,7 +19,7 @@ All downloads are built from this code by GitHub itself (see "Where the download
 | Folder | What it is |
 |---|---|
 | [`Emberlight/`](Emberlight) | The in-game addon (Lua). Guild events, adventures and replies, shared with other guild members through the game's addon channel. Works fully on its own. |
-| [`launcher/`](launcher) | Emberlight Companion, the desktop app (Tauri: Rust with a React window). Shows guild events and announcements, starts WoW through Battle.net, keeps the addon up to date. |
+| [`launcher/`](launcher) | Emberlight Companion, the desktop app (Tauri: Rust with a React window). Shows guild events, adventures and announcements, starts WoW through Battle.net, keeps the addon up to date. |
 | [`sync/`](sync) | The part of the app that reads the addon's saved file after you log out, uploads your own posts to the guild's website, and writes the guild's posts into a small data addon, `Emberlight_Data`. Also a command-line tool. |
 
 ## Do I need the app?

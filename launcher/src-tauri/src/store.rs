@@ -16,7 +16,7 @@ pub struct Settings {
     pub wow_root: Option<String>,
     pub flavor: String,
     /// The member picked the game version in Settings. Until then the app follows the guild:
-    /// the WoW: Forever beta when it is installed (game::prefer_forever).
+    /// WoW: Forever (`_forever_`, else the beta) when it is installed (game::prefer_forever).
     pub flavor_chosen: bool,
     pub server: String,
     pub member_name: Option<String>,
@@ -28,19 +28,22 @@ pub struct Settings {
     /// Closing the window keeps the app in the tray (notifications, update checks); Quit is in the
     /// tray menu. When off, closing quits unless a game session is being watched.
     pub keep_in_tray: bool,
+    /// The one-time explanation shown when Close first leaves the app in the tray.
+    pub tray_notice_seen: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Settings {
             wow_root: None,
-            flavor: "_retail_".into(),
+            flavor: "_forever_".into(),
             flavor_chosen: false,
             server: DEFAULT_SERVER.into(),
             member_name: None,
             discord_id: None,
             auto_update_addon: true,
             keep_in_tray: true,
+            tray_notice_seen: false,
         }
     }
 }

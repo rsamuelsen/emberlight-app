@@ -1,7 +1,7 @@
-//! Finding World of Warcraft, syncing and launching through Battle.net.
+//! Finding World of Warcraft, syncing and starting its client.
 //!
-//! The launcher never handles Blizzard credentials: it asks Battle.net to start the game, and
-//! Battle.net signs the player in as usual.
+//! Start the selected game client directly; use Battle.net only if it cannot start.
+//! Credentials stay with the game and Battle.net.
 
 use crate::store::{Settings, SyncReport};
 use emberlight_sync::{api, datafile, flow, lua, paths, records, update, wow};
@@ -21,7 +21,10 @@ pub struct WowStatus {
     pub root: Option<String>,
     pub problem: Option<String>,
     pub flavors: Vec<String>,
+    /// The game folders that are WoW: Forever (the released game or its beta), whatever their name.
+    pub forever: Vec<String>,
     pub emberlight: Option<String>,
+    pub version: Option<String>,
     pub accounts: Vec<String>,
     pub game_running: bool,
     /// The game programs still running, so the member can see what to close.
@@ -32,19 +35,36 @@ pub fn root(settings: &Settings) -> Result<PathBuf, String> {
     paths::find_root(settings.wow_root.as_deref().map(Path::new)).map_err(|e| e.to_string())
 }
 
-/// The WoW: Forever beta's game folder (WowB.exe), where the guild plays since October 2026.
+/// WoW: Forever's game folder since launch (4 November 2026), seen on a real install.
+pub const FOREVER: &str = "_forever_";
+/// The WoW: Forever beta's game folder (WowB.exe), where the guild played in October 2026.
 pub const FOREVER_BETA: &str = "_classic_beta_";
 
-/// Unless the member chose a game version, use the Forever beta whenever it is installed.
+/// The installed WoW: Forever folder to use: the released game (`_forever_`, or any other folder
+/// Battle.net says is Forever and not a test client), else the beta.
+pub fn forever_folder(root: &Path) -> Option<String> {
+    let found = paths::flavors(root);
+    let live = found.iter().find(|f| f.as_str() == FOREVER).or_else(|| {
+        found.iter().find(|f| {
+            let dir = root.join(f.as_str());
+            f.as_str() != FOREVER_BETA && paths::is_forever(&dir) && !paths::is_test_client(&dir)
+        })
+    });
+    live.or_else(|| found.iter().find(|f| f.as_str() == FOREVER_BETA)).cloned()
+}
+
+/// The Companion follows WoW: Forever. Keep an explicitly chosen Forever client, but migrate
+/// old Retail/Classic choices and missing clients to the released game, else its beta.
+/// If Forever is not installed, target its missing folder rather than updating another game.
 pub fn prefer_forever(settings: &mut Settings) {
-    if settings.flavor_chosen {
+    let root = root(settings).ok();
+    if settings.flavor_chosen
+        && let Some(dir) = root.as_ref().and_then(|r| paths::flavor_dir(r, &settings.flavor).ok())
+        && (settings.flavor == FOREVER_BETA || paths::is_forever(&dir))
+    {
         return;
     }
-    if let Ok(root) = root(settings)
-        && paths::flavor_dir(&root, FOREVER_BETA).is_ok()
-    {
-        settings.flavor = FOREVER_BETA.into();
-    }
+    settings.flavor = root.as_deref().and_then(forever_folder).unwrap_or_else(|| FOREVER.into());
 }
 
 pub fn status(settings: &Settings) -> WowStatus {
@@ -54,10 +74,11 @@ pub fn status(settings: &Settings) -> WowStatus {
     let root = match root {
         Ok(r) => r,
         Err(problem) => {
-            return WowStatus { root: None, problem: Some(problem), flavors: vec![], emberlight: None, accounts: vec![], game_running, running };
+            return WowStatus { root: None, problem: Some(problem), flavors: vec![], forever: vec![], emberlight: None, version: None, accounts: vec![], game_running, running };
         }
     };
     let flavors = paths::flavors(&root);
+    let forever = flavors.iter().filter(|f| f.as_str() == FOREVER_BETA || paths::is_forever(&root.join(f.as_str()))).cloned().collect();
     let (emberlight, accounts, problem) = match paths::flavor_dir(&root, &settings.flavor) {
         Ok(dir) => (
             datafile::read_interface(&paths::addons_dir(&dir)).ok(),
@@ -66,7 +87,8 @@ pub fn status(settings: &Settings) -> WowStatus {
         ),
         Err(e) => (None, vec![], Some(e.to_string())),
     };
-    WowStatus { root: Some(root.display().to_string()), problem, flavors, emberlight, accounts, game_running, running }
+    let version = paths::game_product(&root.join(&settings.flavor)).and_then(|product| paths::game_version(&root, &product));
+    WowStatus { root: Some(root.display().to_string()), problem, flavors, forever, emberlight, version, accounts, game_running, running }
 }
 
 /// "Name-Realm" of every character played in this game folder: those the game has made a folder
@@ -182,7 +204,8 @@ pub type AddonOutcome = (&'static str, String, Option<String>);
 pub fn update_addon(settings: &Settings) -> Result<AddonOutcome, String> {
     let (dir, root) = addons(settings)?;
     game_closed(&root)?;
-    let outcome = update::check_and_install(&settings.server, &dir, Some(&settings.flavor), update::RELEASE_PUBLIC_KEY, env!("CARGO_PKG_VERSION"))
+    let tags = paths::folder_tags(&root.join(&settings.flavor));
+    let outcome = update::check_and_install(&settings.server, &dir, Some(&tags), update::RELEASE_PUBLIC_KEY, env!("CARGO_PKG_VERSION"))
         .map_err(|e| sentence(&e.to_string()))?;
     Ok(match outcome {
         update::Outcome::UpToDate(v) => ("current", format!("Emberlight {v} is up to date."), Some(v)),
@@ -200,8 +223,9 @@ pub fn update_addon(settings: &Settings) -> Result<AddonOutcome, String> {
 /// Only look: whether the guild has published a newer addon than the one installed. Allowed while
 /// the game runs, since nothing is changed.
 pub fn check_addon(settings: &Settings) -> Result<AddonOutcome, String> {
-    let (dir, _) = addons(settings)?;
-    let latest = update::latest_version(&settings.server, Some(&settings.flavor), update::RELEASE_PUBLIC_KEY, env!("CARGO_PKG_VERSION"))
+    let (dir, root) = addons(settings)?;
+    let tags = paths::folder_tags(&root.join(&settings.flavor));
+    let latest = update::latest_version(&settings.server, Some(&tags), update::RELEASE_PUBLIC_KEY, env!("CARGO_PKG_VERSION"))
         .map_err(|e| sentence(&e.to_string()))?;
     let installed = update::installed_version(&dir);
     Ok(match (latest, installed) {
@@ -228,30 +252,75 @@ fn sentence(s: &str) -> String {
     out
 }
 
-/// How Battle.net is asked to start a game folder. Retail's launch code is known and starts the
-/// game. The Forever beta's is not known, so Battle.net is opened on the beta (its product id,
-/// wow_classic_beta) and the member presses Play there.
-#[derive(Debug, PartialEq)]
-enum Start {
-    Launch(&'static str),
-    Open(&'static str),
+/// Only known game-client filenames are executable candidates. Never start helpers or tools.
+#[cfg(any(not(target_os = "macos"), test))]
+fn client_priority(name: &str) -> Option<usize> {
+    ["wow.exe", "wowforever.exe", "wowf.exe", "wowclassic.exe", "wowb.exe", "wowclassicb.exe", "wowt.exe", "wowclassict.exe"]
+        .iter().position(|candidate| name.eq_ignore_ascii_case(candidate))
 }
 
-fn start_for(flavor: &str) -> Option<Start> {
-    match flavor {
-        "_retail_" => Some(Start::Launch("WoW")),
-        FOREVER_BETA => Some(Start::Open("wow_classic_beta")),
-        _ => None,
-    }
+#[cfg(any(not(target_os = "macos"), test))]
+fn client_executable(dir: &Path) -> Option<PathBuf> {
+    let root = dir.canonicalize().ok()?;
+    let mut clients: Vec<_> = std::fs::read_dir(dir).ok()?.filter_map(Result::ok).filter_map(|entry| {
+        let priority = client_priority(entry.file_name().to_str()?)?;
+        let path = entry.path().canonicalize().ok()?;
+        (path.is_file() && path.parent() == Some(root.as_path())).then_some((priority, path))
+    }).collect();
+    clients.sort_by_key(|(priority, _)| *priority);
+    clients.into_iter().next().map(|(_, path)| path)
 }
 
-pub fn launch(settings: &Settings) -> Result<(), String> {
-    let start = start_for(&settings.flavor).ok_or("Launching this game version is not supported yet. Start it from Battle.net.")?;
-    let argument = match start {
-        Start::Launch(code) => format!("--exec=\"launch {code}\""),
-        Start::Open(product) => format!("--game={product}"),
-    };
-    launch_battle_net(&argument)
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LaunchMethod { Direct, BattleNet }
+
+pub fn launch(settings: &Settings) -> Result<LaunchMethod, String> {
+    let dir = paths::flavor_dir(&root(settings)?, &settings.flavor).map_err(|e| e.to_string())?;
+    launch_from(&dir)
+}
+
+fn battle_net_argument(dir: &Path) -> Result<String, String> {
+    let product = paths::game_product(dir).ok_or("The Battle.net product could not be identified. Start the game from Battle.net.")?;
+    let code = if product == "wow" { "WoW" } else { product.as_str() };
+    Ok(format!("--exec=\"launch {code}\""))
+}
+
+pub fn fallback_launch(settings: &Settings) -> Result<LaunchMethod, String> {
+    let dir = paths::flavor_dir(&root(settings)?, &settings.flavor).map_err(|e| e.to_string())?;
+    launch_battle_net(&battle_net_argument(&dir)?)?;
+    Ok(LaunchMethod::BattleNet)
+}
+
+fn finish_launch(direct: Result<(), String>, dir: &Path, fallback: impl FnOnce(&str) -> Result<(), String>) -> Result<LaunchMethod, String> {
+    if direct.is_ok() { return Ok(LaunchMethod::Direct); }
+    fallback(&battle_net_argument(dir)?).map(|_| LaunchMethod::BattleNet)
+        .map_err(|error| format!("The game could not be started directly or through Battle.net. {error}"))
+}
+
+fn launch_from(dir: &Path) -> Result<LaunchMethod, String> {
+    #[cfg(target_os = "macos")]
+    let direct = start_client(dir, dir);
+    #[cfg(not(target_os = "macos"))]
+    let direct = client_executable(dir).ok_or_else(|| "The game client was not found.".to_owned()).and_then(|exe| start_client(&exe, dir));
+    finish_launch(direct, dir, launch_battle_net)
+}
+
+#[cfg(windows)]
+fn start_client(exe: &Path, dir: &Path) -> Result<(), String> {
+    Command::new(exe).current_dir(dir).spawn().map(|_| ()).map_err(|e| format!("Could not start the game ({e})."))
+}
+
+#[cfg(target_os = "macos")]
+fn start_client(_exe: &Path, dir: &Path) -> Result<(), String> {
+    let app = ["World of Warcraft.app", "World of Warcraft Classic.app"].iter().map(|n| dir.join(n)).find(|p| p.is_dir())
+        .ok_or("The game app was not found.")?;
+    Command::new("open").arg(app).status().map_err(|e| e.to_string())?
+        .success().then_some(()).ok_or_else(|| "Could not start the game.".into())
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+fn start_client(_exe: &Path, _dir: &Path) -> Result<(), String> {
+    Err("Launching is only available on Windows and macOS.".into())
 }
 
 #[cfg(windows)]
@@ -284,23 +353,58 @@ mod tests {
     use super::*;
 
     #[test]
-    fn retail_launches_and_the_forever_beta_opens_battle_net() {
-        assert_eq!(start_for("_retail_"), Some(Start::Launch("WoW")));
-        assert_eq!(start_for("_classic_beta_"), Some(Start::Open("wow_classic_beta")));
-        assert_eq!(start_for("_ptr_"), None);
+    fn falls_back_only_when_direct_start_fails() {
+        let dir = std::env::temp_dir().join(format!("emberlight-fallback-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(".flavor.info"), "Product Flavor!STRING:0\nwowf\n").unwrap();
+        assert_eq!(finish_launch(Ok(()), &dir, |_| panic!("Battle.net must not open after a direct start")), Ok(LaunchMethod::Direct));
+        assert_eq!(finish_launch(Err("direct failed".into()), &dir, |arg| { assert_eq!(arg, "--exec=\"launch wowf\""); Ok(()) }), Ok(LaunchMethod::BattleNet));
+        assert!(finish_launch(Err("direct failed".into()), &dir, |_| Err("fallback failed".into())).unwrap_err().contains("fallback failed"));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
-    fn the_forever_beta_is_preferred_until_the_member_chooses() {
+    fn finds_the_client_and_never_a_helper() {
+        let dir = std::env::temp_dir().join(format!("emberlight-exe-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in ["Battle.net.exe", "BlizzardError.exe", "WowVoiceProxy.exe", "WowTools.exe"] {
+            std::fs::write(dir.join(name), "").unwrap();
+        }
+        assert!(client_executable(&dir).is_none());
+        std::fs::write(dir.join("WowForever.exe"), "").unwrap();
+        assert_eq!(client_executable(&dir).unwrap().file_name().unwrap(), "WowForever.exe");
+        std::fs::write(dir.join("Wow.exe"), "").unwrap();
+        assert_eq!(client_executable(&dir).unwrap().file_name().unwrap(), "Wow.exe");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn forever_replaces_old_client_choices_and_keeps_forever_choices() {
+        assert_eq!(Settings::default().flavor, FOREVER);
         let dir = std::env::temp_dir().join(format!("emberlight-flavor-test-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("_retail_")).unwrap();
+        let mut legacy = Settings { wow_root: Some(dir.display().to_string()), flavor: "_retail_".into(), flavor_chosen: true, ..Settings::default() };
+        prefer_forever(&mut legacy);
+        assert_eq!(legacy.flavor, "_forever_", "Retail alone is never the fallback");
         std::fs::create_dir_all(dir.join("_classic_beta_")).unwrap();
         let mut settings = Settings { wow_root: Some(dir.display().to_string()), ..Settings::default() };
         prefer_forever(&mut settings);
         assert_eq!(settings.flavor, "_classic_beta_");
-        let mut chosen = Settings { wow_root: Some(dir.display().to_string()), flavor_chosen: true, ..Settings::default() };
+        // The released game wins over the beta, also for a member the beta was picked for.
+        std::fs::create_dir_all(dir.join("_forever_")).unwrap();
+        prefer_forever(&mut settings);
+        assert_eq!(settings.flavor, "_forever_");
+        let mut chosen = Settings { wow_root: Some(dir.display().to_string()), flavor: "_retail_".into(), flavor_chosen: true, ..Settings::default() };
         prefer_forever(&mut chosen);
-        assert_eq!(chosen.flavor, "_retail_");
+        assert_eq!(chosen.flavor, "_forever_", "Migrate the old Retail test selection");
+        let mut beta = Settings { wow_root: Some(dir.display().to_string()), flavor: "_classic_beta_".into(), flavor_chosen: true, ..Settings::default() };
+        prefer_forever(&mut beta);
+        assert_eq!(beta.flavor, "_classic_beta_", "An explicit Forever beta choice is kept");
+        // A chosen beta that was uninstalled after launch moves to the released game.
+        let mut gone = Settings { wow_root: Some(dir.display().to_string()), flavor: "_classic_beta_".into(), flavor_chosen: true, ..Settings::default() };
+        std::fs::remove_dir_all(dir.join("_classic_beta_")).unwrap();
+        prefer_forever(&mut gone);
+        assert_eq!(gone.flavor, "_forever_");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

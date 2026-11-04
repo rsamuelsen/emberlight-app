@@ -1,10 +1,9 @@
 // A small, safe renderer for the Discord markdown used in announcements. It builds React elements
 // only (no HTML strings), so announcement text can never inject markup into the launcher.
 import type { ReactNode } from "react";
+import { SERVER_TIME_ZONE, serverWhen } from "./events";
 
-const stamp = new Intl.DateTimeFormat("en-GB", { weekday: "long", day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" });
-const stampDay = new Intl.DateTimeFormat("en-GB", { weekday: "long", day: "numeric", month: "long" });
-const stampTime = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit" });
+const stampDay = new Intl.DateTimeFormat("en-GB", { timeZone: SERVER_TIME_ZONE, weekday: "long", day: "numeric", month: "long" });
 
 const INLINE =
   /(\*\*[^*\n]+\*\*|__[^_\n]+__|\*[^*\n]+\*|_[^_\n]+_|~~[^~\n]+~~|`[^`\n]+`|\|\|[^|\n]+\|\||<a?:\w+:\d+>|<t:-?\d+(?::[tTdDfFR])?>|\[[^\]\n]+\]\(https:\/\/[^)\s]+\)|https:\/\/[^\s<>()]+)/;
@@ -12,9 +11,10 @@ const INLINE =
 function discordTime(token: string) {
   const [, unix, style] = /^<t:(-?\d+)(?::(\w))?>$/.exec(token)!;
   const d = new Date(Number(unix) * 1000);
-  if (style === "t" || style === "T") return stampTime.format(d);
+  if (!Number.isFinite(d.getTime())) return token;
+  if (style === "t" || style === "T") return serverWhen(Number(unix));
   if (style === "d" || style === "D") return stampDay.format(d);
-  return stamp.format(d);
+  return serverWhen(Number(unix), true);
 }
 
 export function inline(text: string, openLink: (url: string) => void, key = "i"): ReactNode[] {

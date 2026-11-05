@@ -23,6 +23,12 @@ It never writes to your saved files. The only game folders it changes are
 `Interface/AddOns/Emberlight` (when it installs an addon update; the previous version is kept so you
 can go back) and `Interface/AddOns/Emberlight_Data`.
 
+**Officers only:** when the signed-in member is a guild officer on the website, each sync also
+downloads the guild's member list for the addon's in-game roster check (each member's verified
+character names, which one is their main, and the rank that goes with their Discord rank; no
+Discord names or ids) and writes it to `Emberlight_Data/Roster.lua`. For anyone else that file holds
+no list, and a list written earlier is removed at the next sync. Nothing is sent back.
+
 ## The app: what it sends, where and when
 
 **Everything goes to one place: the guild's website, `https://emberlightrp.com`.** Nothing else, over

@@ -87,8 +87,21 @@ pub fn push(client: &Client, files: &[PathBuf], now: i64) -> Result<PushReport> 
 /// Download the guild's records into `<addons>/Emberlight_Data`. The caller must first make sure
 /// the game is not running; `still_closed` is asked again after the download, right before the
 /// files are written, since the game can be started (from Battle.net) while it downloads.
+///
+/// For an officer it also writes the website's member list for the addon's roster check; for
+/// anyone else it clears it. A failed roster download never stops the notices: the list from the
+/// last sync stays (the addon shows when it was made) and the report says why.
 pub fn pull(client: &Client, addons: &Path, still_closed: impl FnOnce() -> Result<()>) -> Result<WriteReport> {
     let download = client.download()?;
+    let roster = client.roster_check();
     still_closed()?;
-    datafile::write_data_addon(addons, &Archive { generated: download.generated, notices: download.notices, replies: download.replies, removed: download.removed })
+    let mut report = datafile::write_data_addon(addons, &Archive { generated: download.generated, notices: download.notices, replies: download.replies, removed: download.removed })?;
+    match roster {
+        Ok(roster) => {
+            datafile::write_roster(addons, roster.as_ref())?;
+            report.roster = roster.map(|r| r.members.len());
+        }
+        Err(e) => report.roster_problem = Some(format!("{e:#}")),
+    }
+    Ok(report)
 }

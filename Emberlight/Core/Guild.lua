@@ -57,6 +57,10 @@ function C.Info()
         "guild " .. (guild or "none") .. ", board " .. (board and (tostring(GetCurrentRegion()) .. ":" .. tostring(board)) or "none"),
     }
 end
+-- Ranks with officer authority in Emberlight besides the guild master (rank index 0): Flame
+-- Keepers, and "Officer Alt", the rank officers' alts have (owner's decision, 5 November 2026).
+-- Exact names only; another rank's title never grants it.
+C.officerRanks = { ["Flame Keeper"] = true, ["Officer Alt"] = true }
 function C.Roster()
     if C.Channel() == "PARTY" then local _, roster = C.Party(); return roster or {} end
     local guild = C.ScopeKey()
@@ -68,7 +72,7 @@ function C.Roster()
         local name, rank, index = GetGuildRosterInfo(i)
         local key = C.Canonical(name)
         if key and type(index) == "number" then
-            members[key] = { name = name, officer = index == 0 or rank == "Flame Keeper", rank = rank }
+            members[key] = { name = name, officer = index == 0 or C.officerRanks[rank] == true, rank = rank }
             -- A roster name without a realm: C.Local finds this member by name alone.
             if not name:find("-", 1, true) then names[key:match("^[^-]+")] = key end
         end

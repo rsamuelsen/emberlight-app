@@ -21,7 +21,7 @@ U.kinds = {
 U.stays = { { 1, "1 hour" }, { 2, "2 hours" }, { 4, "4 hours" }, { 12, "12 hours" }, { 24, "1 day" }, { 72, "3 days" }, { 168, "1 week" } }
 
 local function notices() return E.Sync.List() end
-local function context() return E.Sync.Context() end
+local function context() return E.Sync.ReadContext() end
 local function officer()
     local _, roster, me = context()
     return roster and me and roster[me] and roster[me].officer or false
@@ -164,8 +164,12 @@ function U.CreateLauncher()
         if S.db then S.db.settings.minimap.angle = angle end
         U.PlaceLauncher(angle)
     end
-    b:SetScript("OnDragStart", function(self) GameTooltip:Hide(); self:SetScript("OnUpdate", follow) end)
-    b:SetScript("OnDragStop", function(self) self:SetScript("OnUpdate", nil) end)
+    b:SetScript("OnDragStart", function(self)
+        GameTooltip:Hide()
+        if self.dragTimer then self.dragTimer:Cancel() end
+        self.dragTimer = C_Timer.NewTicker(.05, follow)
+    end)
+    b:SetScript("OnDragStop", function(self) if self.dragTimer then self.dragTimer:Cancel(); self.dragTimer = nil end end)
     b:SetScript("OnClick", function() U.Toggle() end)
     b:SetScript("OnEnter", function(self)
         GameTooltip:SetOwner(self, "ANCHOR_LEFT")
@@ -214,29 +218,49 @@ function U.ApplyScale()
 end
 
 function U.Toggle()
+    if not (U.frame and U.frame:IsShown()) and InCombatLockdown and InCombatLockdown() then
+        DEFAULT_CHAT_FRAME:AddMessage("Emberlight: open the ledger after combat.")
+        return
+    end
     if not U.frame then U.Create() end
-    if U.frame:IsShown() then U.frame:Hide() else U.frame:Show(); U.frame:Raise(); U.Refresh(); U.Status() end
+    if U.frame:IsShown() then U.LeaveWriter(function() U.frame:Hide() end)
+    else U.frame:Show(); U.frame:Raise(); U.Refresh(); U.Status() end
 end
 
 -- "Are you sure": a small sheet over the page before something that cannot be undone.
-function U.Confirm(text, label, action)
+function U.Confirm(text, label, action, cancelLabel)
     local s = U.confirmSheet
     if not s then
-        s = U.Paper(U.frame, 420, 150)
+        s = U.Paper(U.frame, 470, 170)
         s:SetPoint("CENTER", 91, 0); s:SetFrameLevel(U.frame:GetFrameLevel() + 40); s:EnableMouse(true)
-        s.text = at(U.FitText(U.Text(s, "", 15, C.ink, nil, "game"), 372, 60, true), 24, -24)
-        s.yes = at(U.Button(s, "", 170, function() s:Hide(); if s.action then s.action() end end, "seal"), 24, -96)
-        s.no = at(U.Button(s, "Keep it", 140, function() s:Hide() end), 206, -96)
+        s.text = at(U.FitText(U.Text(s, "", 15, C.ink, nil, "game"), 422, 72, true), 24, -24)
+        s.yes = at(U.Button(s, "", 200, function() s:Hide(); if s.action then s.action() end end, "seal"), 24, -118)
+        s.no = at(U.Button(s, "Keep it", 210, function() s:Hide() end), 234, -118)
         U.confirmSheet = s
     end
-    s.text:SetText(text); s.yes.label:SetText(label); s.action = action
+    s.text:SetText(text); s.yes.label:SetText(label); s.no.label:SetText(cancelLabel or "Keep it"); s.action = action
     s:Show()
+end
+-- Ordinary drafts save as you type. Edits are separate, so warn before discarding those words.
+function U.LeaveWriter(action)
+    local e, d = U.editing, U.draft
+    if U.tab == "Write" and e and d and (d.title ~= e.title or d.location ~= e.location or d.body ~= e.body) then
+        U.Confirm("Leave without saving these changes? Your original notice stays on the board.", "Leave without saving", action, "Keep editing")
+    else action() end
 end
 -- Leaves whatever is being written and shows a page.
 function U.Go(tab)
+    U.LeaveWriter(function() U.GoNow(tab) end)
+end
+function U.GoNow(tab)
     if U.confirmSheet then U.confirmSheet:Hide() end
     if U.nowSheet then U.nowSheet:Hide() end
+    if U.answersSheet then U.answersSheet:Hide() end
+    if U.lineSheet then U.lineSheet:Hide() end
+    U.expanded = false; U.homeView = nil
+    U.filterWhen = "all"; U.filterKind = nil
     U.editing = nil; U.composeBoard = nil; U.tab = tab
+    if U.search then U.search:SetText(""); U.search:ClearFocus() end
     U.Refresh(); U.Status()
 end
 -- Opens one notice on its board, from Home.
@@ -282,11 +306,9 @@ function U.Create()
     local crest = f:CreateTexture(nil, "ARTWORK")
     crest:SetSize(96, 96); crest:SetPoint("TOPLEFT", 63, -26)
     crest:SetTexture(media .. "Crest128.tga")
-    local name = at(U.FitText(U.Text(f, "Emberlight", 24, C.goldHi, nil, "title"), 170, 28, false), 26, -126)
-    name:SetJustifyH("CENTER")
     U.tabs = {}
     for i, tab in ipairs({ "Home", "Noticeboard", "Letters", "Mine" }) do
-        local button = at(U.Button(f, U.labels[tab], 170, function() U.Go(tab) end, "nav"), 26, -172 - (i - 1) * 36)
+        local button = at(U.Button(f, U.labels[tab], 170, function() U.Go(tab) end, "nav"), 26, -140 - (i - 1) * 36)
         button:SetHeight(34)
         button.badge = U.Text(button, "", 15, C.goldHi)
         button.badge:SetPoint("RIGHT", -12, 0)
@@ -295,6 +317,12 @@ function U.Create()
         button.badgeSeal:SetPoint("RIGHT", button.badge, "LEFT", -3, 0)
         U.tabs[tab] = button
     end
+    -- The roster check, for the guild master and Flame Keepers only (UI/Roster.lua).
+    local roster = U.Button(f, U.labels.Roster, 170, function() U.Go("Roster") end, "nav")
+    roster:SetHeight(34)
+    roster.badge = U.Text(roster, "", 15, C.goldHi); roster.badge:SetPoint("RIGHT", -12, 0)
+    roster.badgeSeal = seal(roster, 13); roster.badgeSeal:SetPoint("RIGHT", roster.badge, "LEFT", -3, 0)
+    U.tabs.Roster = roster
     -- Settings is a place like the others, set a little apart under a thin gold rule.
     U.navRule = U.Rule(f, 40, -290, 142, { .788, .604, .247, .35 })
     U.settingsButton = at(U.Button(f, "Settings", 170, function() U.Go("Settings") end, "nav"), 26, -300)
@@ -303,7 +331,7 @@ function U.Create()
 
     U.pageTitle = at(U.FitText(U.Text(f, "", 27, C.ink, nil, "game"), 420, 34, false), 244, -46)
     -- The close mark: a small pewter stud with a cross cut into it.
-    local close = at(U.Button(f, "", 30, function() f:Hide() end, "bare"), 882, -51)
+    local close = at(U.Button(f, "", 30, function() U.LeaveWriter(function() f:Hide() end) end, "bare"), 882, -51)
     close:SetHeight(30)
     local stud = close:CreateTexture(nil, "ARTWORK")
     stud:SetSize(28, 28); stud:SetPoint("CENTER")
@@ -312,9 +340,15 @@ function U.Create()
     close:HookScript("OnEnter", function() stud:SetVertexColor(1, 1, 1) end)
     close:HookScript("OnLeave", function() stud:SetVertexColor(.9, .9, .9) end)
     U.action = at(U.Button(f, "", 170, function()
-        if U.tab == "Write" then U.Go(U.returnTab or "Home") else U.StartCompose(U.tab) end
+        if U.homeView then U.Go("Home")
+        elseif U.tab == "Write" then U.Go(U.returnTab or "Home") else U.StartCompose(U.tab) end
     end, "seal"), 688, -50)
-    U.nowButton = at(U.Button(f, "Here now", 120, function() U.OpenHereNow() end), 560, -50)
+    U.nowButton = at(U.Button(f, "Quick post", 120, function() U.OpenHereNow() end), 560, -50)
+    U.nowButton:HookScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_BOTTOM"); GameTooltip:SetText("For an adventure starting now.", 1, 1, 1); GameTooltip:Show()
+    end)
+    U.nowButton:HookScript("OnLeave", function() GameTooltip:Hide() end)
+    U.connection = at(U.FitText(U.Text(f, "", 14, C.text), 150, 102, true), 40, -466)
     local divider = f:CreateTexture(nil, "ARTWORK")
     divider:SetPoint("TOPLEFT", 244, -78); divider:SetSize(654, 33)
     divider:SetTexture(media .. "Divider.tga")
@@ -330,8 +364,11 @@ function U.Create()
     U.CreateWriter()
     U.CreateSettings()
     U.CreateSupplies()
+    U.CreateRoster()
     f:SetScript("OnShow", function()
+        if InCombatLockdown and InCombatLockdown() then f:Hide(); return end
         U.timer = C_Timer.NewTicker(30, function()
+            U.UpdateConnection()
             if U.tab == "Noticeboard" or U.tab == "Letters" or U.tab == "Mine" then U.RefreshReader()
             elseif U.tab == "Home" then U.RefreshHome()
             elseif U.tab == "Write" then U.WriterLabels() end
@@ -339,6 +376,8 @@ function U.Create()
     end)
     f:SetScript("OnHide", function()
         if U.timer then U.timer:Cancel(); U.timer = nil end
+        U.Status()
+        if U.confirmSheet then U.confirmSheet:Hide() end
     end)
     f:Hide()
 end
@@ -354,7 +393,12 @@ function U.Refresh()
     -- "Your notices" is in the rail only while the member has something on a board.
     local showMine = mine > 0 or U.tab == "Mine" or (U.tab == "Write" and U.returnTab == "Mine")
     U.tabs.Mine:SetShown(showMine)
-    local below = showMine and -326 or -290
+    -- The roster check only while the character holds officer rank in game.
+    local showRoster = U.RosterAllowed()
+    if U.tab == "Roster" and not showRoster then U.tab = "Home" end
+    U.tabs.Roster:SetShown(showRoster)
+    U.tabs.Roster:ClearAllPoints(); at(U.tabs.Roster, 26, showMine and -284 or -248)
+    local below = (showMine and -294 or -258) - (showRoster and 36 or 0)
     U.navRule:ClearAllPoints(); U.navRule:SetPoint("TOPLEFT", 40, below)
     U.settingsButton:ClearAllPoints(); at(U.settingsButton, 26, below - 10)
     for tab, button in pairs(U.tabs) do
@@ -367,27 +411,48 @@ function U.Refresh()
 
     local writing = U.tab == "Write"
     local official = (writing and U.composeBoard or U.tab) == "Noticeboard"
-    U.pageTitle:SetText(writing and (U.editing and "Edit" or official and "New guild event" or "New adventure") or U.labels[U.tab] or "")
-    U.action.label:SetText(writing and "Back" or official and "New guild event" or "New adventure")
-    U.SetVariant(U.action, writing and "ink" or "seal")
-    U.action:SetShown(writing or U.tab == "Letters" or U.tab == "Mine" or (U.tab == "Noticeboard" and officer()))
-    U.nowButton:SetShown(U.tab == "Letters")
+    U.pageTitle:SetText(U.homeView == "joining" and "You are joining" or U.homeView == "unread" and "Unread notices"
+        or writing and (U.editing and "Edit" or official and "New guild event" or "New adventure") or U.labels[U.tab] or "")
+    U.action.label:SetText(U.homeView and "Back to Home" or writing and "Back" or official and "New guild event" or "New adventure")
+    U.SetVariant(U.action, (writing or U.homeView) and "ink" or "seal")
+    U.action:SetShown(U.homeView ~= nil or writing or U.tab == "Letters" or U.tab == "Mine" or (U.tab == "Noticeboard" and officer()))
+    U.nowButton:SetShown(U.tab == "Letters" and not U.homeView)
     U.home:SetShown(U.tab == "Home")
-    U.reader:SetShown(U.tab == "Noticeboard" or U.tab == "Letters" or U.tab == "Mine")
+    U.reader:SetShown(U.homeView ~= nil or U.tab == "Noticeboard" or U.tab == "Letters" or U.tab == "Mine")
     U.writer:SetShown(writing)
     U.settings:SetShown(U.tab == "Settings")
     U.supplies:Hide()
+    U.rosterPage:SetShown(U.tab == "Roster")
+    if U.rosterPage:IsShown() then U.RefreshRoster() end
     if U.home:IsShown() then U.RefreshHome() end
     if U.reader:IsShown() then U.RefreshReader() end
     if U.writer:IsShown() then U.LoadDraft() end
     if U.settings:IsShown() then U.RefreshSettings() end
+    U.UpdateConnection()
+end
+
+function U.UpdateConnection()
+    if not U.connection then return end
+    local message = ""
+    if not S.db.settings.guildSync then message = "Messages are paused.\nSaved notices remain readable.\nSee Troubleshooting in Settings."
+    elseif E.Client.CommsBlocked() then message = "Sharing paused by WoW.\nSaved notices remain readable."
+    elseif not E.Sync.Ready() then message = E.Sync.Status()
+    elseif E.Sync.lastError then message = E.Sync.lastError .. ". See Troubleshooting in Settings." end
+    U.connection:SetText(message)
+    U.connection:SetShown(message ~= "")
+end
+function U.RefreshAvailability()
+    U.UpdateConnection()
+    if U.reader:IsShown() then U.RefreshReader()
+    elseif U.home:IsShown() then U.RefreshHome()
+    elseif U.settings:IsShown() then U.RefreshSettings() end
 end
 
 -- Home: the next guild event, what the member is joining, and what is new since they last looked.
 local function homeRows(page, x, limit)
     local rows = {}
     for i = 1, limit do
-        rows[i] = at(ledgerRow(page, 313, function(self) if self.entry then U.OpenEntry(self.entry) end end), x, -286 - (i - 1) * 52)
+        rows[i] = at(ledgerRow(page, 313, function(self) if self.entry then U.OpenEntry(self.entry) end end), x, -306 - (i - 1) * 52)
     end
     return rows
 end
@@ -405,20 +470,28 @@ function U.CreateHome()
     U.homeSeal = at(seal(page, 56), 836, -112)
     U.homeArt = drawing(page, kindArt[4], 60, 60); U.homeArt:SetPoint("TOPLEFT", 240, -124)
     U.homeTitle = at(U.FitText(U.Text(page, "", 22, C.ink, nil, "game"), 520, 28, false), 308, -124)
-    U.homeWhen = at(U.FitText(U.Text(page, "", 16, C.paperMuted), 520, 20, false), 308, -156)
-    U.homeWhere = at(U.FitText(U.Text(page, "", 14, C.paperMuted, nil, "game"), 520, 18, false), 308, -179)
+    U.homeWhen = at(U.FitText(U.Text(page, "", 16, C.paperMuted), 654, 38, true), 244, -158)
+    U.homeWhere = at(U.FitText(U.Text(page, "", 14, C.paperMuted, nil, "game"), 654, 18, false), 244, -198)
     U.homeJoin = at(U.Button(page, "I will join", 140, function()
         if U.nextEvent and reply(U.nextEvent, "I will join") then U.Refresh(); U.Status("Reply queued.") else U.Status("Could not reply. Check your connection.") end
-    end, "seal"), 244, -206)
+    end, "seal"), 244, -224)
     U.homeOpen = U.Button(page, "Read it", 120, function() if U.nextEvent then U.OpenEntry(U.nextEvent) end end)
-    U.Rule(page, 244, -252, 654)
-    upright(page, 571, -264, 300)
-    caps(page, "You are joining", 244, -264)
+    U.Rule(page, 244, -270, 654)
+    upright(page, 571, -282, 280)
+    caps(page, "You are joining", 244, -284)
+    U.joiningAll = at(U.Button(page, "View all", 92, function() U.OpenHomeView("joining") end, "bare"), 465, -278)
+    U.joiningAll:SetHeight(26)
     U.joiningRows = homeRows(page, 244, 5)
-    U.joiningEmpty = at(U.FitText(U.Text(page, "", 15, C.paperMuted), 300, 60, true), 244, -292)
-    caps(page, "New since you last looked", 585, -264)
+    U.joiningEmpty = at(U.FitText(U.Text(page, "", 15, C.paperMuted), 300, 60, true), 244, -312)
+    caps(page, "New since you last looked", 585, -284)
+    U.freshAll = at(U.Button(page, "View all", 92, function() U.OpenHomeView("unread") end, "bare"), 806, -278)
+    U.freshAll:SetHeight(26)
     U.freshRows = homeRows(page, 585, 5)
-    U.freshEmpty = at(U.FitText(U.Text(page, "", 15, C.paperMuted), 300, 60, true), 585, -292)
+    U.freshEmpty = at(U.FitText(U.Text(page, "", 15, C.paperMuted), 300, 60, true), 585, -312)
+end
+function U.OpenHomeView(view)
+    U.GoNow("Letters"); U.homeView = view; U.filterKind = nil
+    U.filterWhen = view; U.expanded = false; U.selected = nil; U.Refresh()
 end
 function U.RefreshHome()
     local now = E.Client.Now()
@@ -426,18 +499,20 @@ function U.RefreshHome()
     for _, e in ipairs(notices()) do
         if not e.cancelled and e.expires > now then
             if e.categoryIndex == 4 and (not nextEvent or e.start < nextEvent.start) then nextEvent = e end
-            if e.own or e.reply == "I will join" then joining[#joining + 1] = e end
-            if not e.read and not e.own then fresh[#fresh + 1] = e end
+            if e.own or e.reply == "I will join" then joining[#joining + 1] = e
+            elseif not e.read then fresh[#fresh + 1] = e end
         end
     end
     table.sort(joining, function(a, b) if a.start == b.start then return a.id < b.id end; return a.start < b.start end)
     U.nextEvent = nextEvent
     local canJoin = nextEvent ~= nil and not nextEvent.own and nextEvent.reply ~= "I will join"
     U.homeJoin:SetShown(canJoin)
+    U.homeJoin:SetEnabled(E.Sync.Ready() or false)
+    U.joiningAll:SetShown(#joining > 0); U.freshAll:SetShown(#fresh > 0)
     U.homeSeal:SetShown(nextEvent ~= nil and not nextEvent.read and not nextEvent.own)
     U.homeArt:SetShown(nextEvent ~= nil)
     U.homeOpen:SetShown(nextEvent ~= nil)
-    U.homeOpen:ClearAllPoints(); at(U.homeOpen, canJoin and 394 or 244, -206)
+    U.homeOpen:ClearAllPoints(); at(U.homeOpen, canJoin and 394 or 244, -224)
     if nextEvent then
         U.homeTitle:SetText(clean(nextEvent.title, 100))
         U.homeWhen:SetText(when(nextEvent.start) .. " / " .. U.Until(nextEvent.start))
@@ -467,10 +542,10 @@ function U.CreateReader()
     body:SetAllPoints(page); U.boardBody = body
     U.filterWhen = "all"
     U.whenChips = {}
-    -- The filters, on Adventures only: one strip across the page, when on the left, kind on the right.
+    -- Date/answer filters on every board; adventure kinds have their own row.
     local x = 244
-    for _, chip in ipairs({ { "all", "All", 52 }, { "today", "Today", 70 }, { "week", "This week", 96 }, { "joining", "Joining", 80 } }) do
-        local button = at(U.Button(body, chip[2], chip[3], function() U.filterWhen = chip[1]; U.RefreshReader() end, "flat"), x, -102)
+    for _, chip in ipairs({ { "all", "All", 52 }, { "today", "Today", 70 }, { "week", "This week", 96 }, { "joining", "Joining", 80 }, { "unread", "Unread", 80 } }) do
+        local button = at(U.Button(body, chip[2], chip[3], function() U.filterWhen = chip[1]; U.selected = nil; U.list:SetVerticalScroll(0); U.RefreshReader() end, "flat"), x, -102)
         button:SetHeight(26); button.key = chip[1]
         U.whenChips[#U.whenChips + 1] = button
         x = x + chip[3] + 4
@@ -482,78 +557,147 @@ function U.CreateReader()
         local width = ({ 84, 98, 108 })[i]
         x = x - width
         local button = at(U.Button(body, E.categories[kind[1]], width, function()
-            U.filterKind = U.filterKind ~= kind[1] and kind[1] or nil; U.RefreshReader()
-        end, "flat"), x, -102)
+            U.filterKind = U.filterKind ~= kind[1] and kind[1] or nil; U.list:SetVerticalScroll(0); U.RefreshReader()
+        end, "flat"), x, -132)
         button:SetHeight(26); button.kind = kind[1]
         U.kindChips[i] = button
         x = x - 4
     end
-    local list = U.Scroll(body, 312, 434)
-    list:SetPoint("TOPLEFT", 244, -138)
+    U.search = U.Field(body, "", 244, -138, 584, 28, 100)
+    U.search.caption:Hide()
+    U.searchHint = at(U.FitText(U.Text(U.search:GetParent(), "Search subject, meeting place or organiser", 14, C.paperMuted), 554, 20, false), 10, -6)
+    U.search:SetScript("OnTextChanged", function(self)
+        U.searchHint:SetShown(self:GetText() == "")
+        if U.list then U.list:SetVerticalScroll(0); U.RefreshReader() end
+    end)
+    U.search:SetScript("OnEscapePressed", function(self) self:SetText(""); self:ClearFocus() end)
+    U.searchClear = at(U.Button(body, "Clear", 60, function() U.search:SetText(""); U.search:ClearFocus() end, "bare"), 838, -158)
+    U.searchClear:SetHeight(28)
+    local list = U.Scroll(body, 312, 380)
+    list:SetPoint("TOPLEFT", 244, -192)
     local child = CreateFrame("Frame", nil, list)
-    child:SetSize(286, 434); list:SetScrollChild(child)
+    child:SetSize(286, 380); list:SetScrollChild(child)
     U.list, U.listChild, U.rows, U.heads = list, child, {}, {}
     U.listEmpty = at(U.FitText(U.Text(child, "", 14, C.paperMuted), 276, 40, true), 4, -8)
-    U.listRule = upright(body, 554, -138, 434)
+    U.listRule = upright(body, 554, -192, 380)
     local paper = CreateFrame("Frame", nil, body)
-    paper:SetSize(332, 434); paper:SetPoint("TOPLEFT", 566, -138); U.paper = paper
+    paper:SetSize(332, 380); paper:SetPoint("TOPLEFT", 566, -192); U.paper = paper
     U.readerArt = drawing(paper, nil, 56, 56); U.readerArt:SetPoint("TOPLEFT", -2, -6)
     U.readerKind = at(U.FitText(U.Text(paper, "", 14, C.brown, nil, "caps"), 270, 16, false), 62, -2)
-    U.readerTitle = at(U.FitText(U.Text(paper, "", 21, C.ink, nil, "game"), 270, 52, true), 62, -20)
-    U.readerMeta = at(U.FitText(U.Text(paper, "", 14, C.paperMuted, nil, "game"), 332, 52, true), 0, -76)
-    U.Rule(paper, 0, -132, 332)
-    U.readerBody = U.ScrollText(paper, 332, 90, C.ink)
-    U.readerBody:SetPoint("TOPLEFT", 0, -142)
+    U.readerTitle = at(U.FitText(U.Text(paper, "", 21, C.ink, nil, "game"), 270, 42, true), 62, -18)
+    U.readerMeta = at(U.FitText(U.Text(paper, "", 14, C.paperMuted, nil, "game"), 332, 52, true), 0, -62)
+    U.expand = at(U.Button(paper, "Read on a full page", 180, function()
+        U.expanded = not U.expanded; U.RefreshReader()
+    end, "bare"), 0, -112)
+    U.expand:SetHeight(24)
+    U.readerBody = U.ScrollText(paper, 332, 130, C.ink)
+    U.readerBody:SetPoint("TOPLEFT", 0, -138)
     -- Who is joining: a heading with the counts, then the names.
-    U.whoHead = at(U.FitText(U.Text(paper, "", 14, C.brown, nil, "caps"), 332, 16, false), 0, -240)
-    U.whoNames = at(U.FitText(U.Text(paper, "", 14, C.ink, nil, "game"), 332, 34, true), 0, -258)
+    U.whoHead = at(U.FitText(U.Text(paper, "", 14, C.brown, nil, "caps"), 222, 18, false), 0, -278)
+    U.answersButton = at(U.Button(paper, "See all", 102, function() U.OpenAnswers() end, "bare"), 230, -274)
+    U.answersButton:SetHeight(26)
     -- A short line to go with an answer: "as the caravan guard".
-    U.lineField = U.Field(paper, "Add a line to your answer (optional)", 0, -296, 332, 28, 80)
-    U.readerState = at(U.FitText(U.Text(paper, "", 14, C.paperMuted), 332, 18, false), 0, -352)
+    U.lineSheet = sheet(U.frame, 520, 180, 322, -220)
+    U.lineField = U.Field(U.lineSheet, "Add a line to your answer (optional)", 24, -24, 472, 32, 80)
+    at(U.Button(U.lineSheet, "Keep this line", 170, function() U.lineField:ClearFocus(); U.lineSheet:Hide() end), 24, -112)
+    at(U.Button(U.lineSheet, "Cancel", 120, function()
+        U.lineField:SetText(U.selected and E.Sync.MyLine(U.selected) or ""); U.lineSheet:Hide()
+    end), 204, -112)
+    U.lineButton = at(U.Button(paper, "Add a line", 120, function() U.lineSheet:Show(); U.lineField:SetFocus() end, "bare"), 0, -300)
+    U.lineButton:SetHeight(26)
+    U.readerState = at(U.FitText(U.Text(paper, "", 14, C.paperMuted), 194, 40, true), 138, -302)
     U.join = at(U.Button(paper, "I will join", 130, function()
         if U.selected and reply(U.selected, "I will join", U.lineField:GetText()) then U.lineField:ClearFocus(); U.Refresh(); U.Status("Reply queued.") else U.Status("Could not reply. Check your connection and the notice expiry.") end
-    end, "seal"), 0, -376)
+    end, "seal"), 0, -344)
     U.decline = at(U.Button(paper, "Unable", 110, function()
         if U.selected and reply(U.selected, "Unable to attend") then U.Refresh(); U.Status("Reply queued.") else U.Status("Could not reply. Check your connection and the notice expiry.") end
-    end), 138, -376)
+    end), 138, -344)
     U.edit = at(U.Button(paper, "Edit", 96, function()
         if U.selected then U.StartEdit(U.selected) end
-    end), 0, -376)
+    end), 0, -344)
     U.again = at(U.Button(paper, "Post again", 116, function()
         if U.selected then U.PostAgain(U.selected) end
-    end), 216, -376)
+    end), 216, -344)
     U.withdraw = at(U.Button(paper, "Withdraw", 110, function()
         if not U.selected then return end
         local entry = U.selected
         U.Confirm("Withdraw \"" .. clean(entry.title, 100) .. "\"? It leaves the board for everyone and cannot be brought back.", "Withdraw", function()
             if S.Cancel(entry) then U.ShowEntry(entry); U.Refresh(); U.Status("Withdrawal queued.") else U.Status("Could not withdraw this notice. Check your connection and permissions.") end
         end)
-    end), 102, -376)
+    end), 102, -344)
     U.moderate = at(U.Button(paper, "Remove", 76, function()
         if not U.selected then return end
         local entry = U.selected
         U.Confirm("Remove \"" .. clean(entry.title, 100) .. "\" from the board? Everyone sees it as removed by an officer, and it cannot be brought back.", "Remove", function()
             if E.Sync.Moderate(entry) then U.ShowEntry(entry); U.Refresh(); U.Status("Notice removed.") else U.Status("Could not remove this notice. Check your officer rank and connection.") end
         end)
-    end), 256, -376)
+    end), 256, -344)
+end
+
+function U.LayoutReader()
+    local full = U.expanded == true
+    local kinds = U.tab == "Letters" and not U.homeView
+    local top = full and -102 or kinds and -192 or -162
+    local width = full and 654 or 332
+    U.list:SetShown(not full); U.listRule:SetShown(not full)
+    U.list:SetPoint("TOPLEFT", 244, top); U.list:SetHeight(572 + top)
+    U.listRule:SetPoint("TOPLEFT", 554, top); U.listRule:SetHeight(572 + top)
+    U.paper:ClearAllPoints(); at(U.paper, full and 244 or 566, top); U.paper:SetSize(width, full and 470 or 380)
+    for _, chip in ipairs(U.whenChips) do chip:SetShown(not full); U.SelectButton(chip, chip.key == U.filterWhen) end
+    for _, chip in ipairs(U.kindChips) do chip:SetShown(not full and kinds); U.SelectButton(chip, chip.kind == U.filterKind) end
+    local searchY = kinds and -158 or -128
+    local holder = U.search:GetParent(); holder:ClearAllPoints(); at(holder, 244, searchY); holder:SetShown(not full)
+    U.searchHint:SetShown(not full and U.search:GetText() == "")
+    U.searchClear:ClearAllPoints(); at(U.searchClear, 838, searchY); U.searchClear:SetShown(not full)
+    U.readerTitle:SetWidth(width - 62); U.readerKind:SetWidth(width - 62); U.readerMeta:SetWidth(width)
+    U.expand.label:SetText(full and "Back to the list" or "Read on a full page")
+    U.readerBody:SetWidth(width - 26); U.readerBody:SetHeight(full and 230 or 130); U.readerBody:Reflow()
+    local lower = full and 100 or 0
+    U.whoHead:ClearAllPoints(); at(U.whoHead, 0, -278 - lower); U.whoHead:SetWidth(width - 110)
+    U.answersButton:ClearAllPoints(); at(U.answersButton, width - 102, -274 - lower)
+    U.lineButton:ClearAllPoints(); at(U.lineButton, 0, -300 - lower)
+    U.readerState:ClearAllPoints(); at(U.readerState, 138, -302 - lower); U.readerState:SetWidth(width - 138)
+    U.readerState:SetHeight(full and 30 or 40)
+    for _, pair in ipairs({{U.join,0},{U.decline,138},{U.edit,0},{U.withdraw,102},{U.again,216},{U.moderate,width-76}}) do
+        pair[1]:ClearAllPoints(); at(pair[1], pair[2], -344 - (full and 94 or 0))
+    end
+end
+
+function U.OpenAnswers()
+    if not U.selected then return end
+    if not U.answersSheet then
+        local s = sheet(U.frame, 604, 456, 272, -114); U.answersSheet = s
+        at(U.Text(s, "Answers", 22, C.ink), 24, -20)
+        at(U.Button(s, "Close", 90, function() s:Hide() end), 490, -16)
+        U.answersBody = U.ScrollText(s, 556, 352, C.ink); at(U.answersBody, 24, -70)
+    end
+    local joining, unable = answers(U.selected)
+    local text = "Joining (" .. #joining .. ")\n" .. (#joining > 0 and table.concat(joining, "\n") or "No answers yet.")
+        .. "\n\nUnable to attend (" .. #unable .. ")\n" .. (#unable > 0 and table.concat(unable, "\n") or "None.")
+    U.answersBody:SetContent(text); U.answersSheet:Show()
 end
 
 function U.RefreshReader()
     for _, row in ipairs(U.rows) do row:Hide() end
     for _, head in ipairs(U.heads) do head:Hide() end
     local events, mine = U.tab == "Noticeboard", U.tab == "Mine"
-    -- Only Adventures can grow long enough to need filters.
-    local filtered = U.tab == "Letters"
     local all, entries = 0, {}
     local now, today = E.Client.Now(), E.Client.DayStart()
+    local query = E.Trim(clean(U.search:GetText(), 100)):lower()
     for _, e in ipairs(notices()) do
-        if mine and e.own or not mine and board(e.categoryIndex) == U.tab then
+        if U.homeView or mine and e.own or not mine and board(e.categoryIndex) == U.tab then
             all = all + 1
-            local keep = not filtered or (U.filterWhen == "all"
+            local joined = e.own or e.reply == "I will join"
+            local keep = (not U.homeView or not e.cancelled and e.expires > now and (U.homeView == "joining" and joined
+                or U.homeView == "unread" and not joined and (not e.read or e == U.selected)))
+                and (U.filterWhen == "all"
                 or U.filterWhen == "today" and e.start < today + 86400
                 or U.filterWhen == "week" and e.start < today + 7 * 86400
-                or U.filterWhen == "joining" and (e.own or e.reply == "I will join"))
-                and (not U.filterKind or e.categoryIndex == U.filterKind)
+                or U.filterWhen == "joining" and joined
+                or U.filterWhen == "unread" and (not e.read or e == U.selected) and not e.own and not e.cancelled)
+                and (not U.filterKind or events or mine or U.homeView or e.categoryIndex == U.filterKind)
+            local searchable = (clean(e.title, 100) .. " " .. clean(e.location, 100) .. " " .. U.Author(e.author, 120)):lower()
+            keep = keep and (query == "" or searchable:find(query, 1, true) ~= nil)
             if keep then entries[#entries + 1] = e end
         end
     end
@@ -564,13 +708,8 @@ function U.RefreshReader()
     U.empty:SetText(all == 0 and (events and "No guild events are planned." or mine and "You have nothing on the boards." or "No adventures posted yet.") or "")
     U.emptyHint:SetText(all > 0 and "" or not context() and "Sharing is not connected. See Settings."
         or events and (officer() and "Post one with New guild event." or "Officers post them here.") or mine and "Post one with New adventure." or "Post the first with New adventure.")
-    for _, chip in ipairs(U.whenChips) do chip:SetShown(filtered); U.SelectButton(chip, chip.key == U.filterWhen) end
-    for _, chip in ipairs(U.kindChips) do chip:SetShown(filtered); U.SelectButton(chip, chip.kind == U.filterKind) end
-    local top = filtered and -138 or -102
-    local height = 572 + top
-    U.list:SetPoint("TOPLEFT", 244, top); U.list:SetHeight(height)
-    U.listRule:SetPoint("TOPLEFT", 554, top); U.listRule:SetHeight(height)
-    U.paper:SetPoint("TOPLEFT", 566, top)
+    U.LayoutReader()
+    local height = U.list:GetHeight()
     U.listEmpty:SetText(all > 0 and #entries == 0 and "Nothing here matches. Choose All to see everything." or "")
     local found, y, lastDay, heads = false, 0, nil, 0
     for i, entry in ipairs(entries) do
@@ -605,13 +744,18 @@ function U.RefreshReader()
     end
     U.listChild:SetHeight(math.max(height, y))
     U.UpdateScroll(U.list)
-    if not found then U.selected = nil end
+    if not found then U.selected = nil; U.expanded = false; U.LayoutReader() end
     U.ShowEntry(U.selected)
+    if U.answersSheet and U.answersSheet:IsShown() then
+        if U.selected then U.OpenAnswers() else U.answersSheet:Hide() end
+    end
 end
 
 function U.ShowEntry(entry)
     U.join:Hide(); U.decline:Hide(); U.withdraw:Hide(); U.edit:Hide(); U.moderate:Hide(); U.again:Hide()
     U.readerArt:SetShown(entry ~= nil)
+    U.expand:SetShown(entry ~= nil); U.answersButton:SetShown(entry ~= nil)
+    U.lineButton:Hide()
     if entry then U.readerArt:SetTexture(media .. (kindArt[entry.categoryIndex] or kindArt[1])) end
     if not entry then
         U.readerKind:SetText("")
@@ -619,8 +763,9 @@ function U.ShowEntry(entry)
         U.readerMeta:SetText(U.tab == "Noticeboard" and "Select an event to read." or U.tab == "Mine" and "Select one to read, change or withdraw." or "Select an adventure to read.")
         U.readerBody:SetContent("")
         U.readerState:SetText("")
-        U.whoHead:SetText(""); U.whoNames:SetText("")
+        U.whoHead:SetText("")
         U.lineField:GetParent():Hide(); U.lineField.caption:Hide()
+        U.lineSheet:Hide()
         return
     end
     U.readerKind:SetText(clean(entry.category, 50))
@@ -632,19 +777,17 @@ function U.ShowEntry(entry)
     U.readerBody:SetContent(clean(entry.body, 1600))
     local joining, unable = answers(entry)
     U.whoHead:SetText(#joining == 0 and #unable == 0 and "No answers yet"
-        or "Who is joining (" .. #joining .. ")" .. (#unable > 0 and (" / " .. #unable .. " unable") or ""))
-    -- Those who cannot come are named too, after those joining (9 October: an "Unable" answer
-    -- showed only as a count, so members thought it had not arrived).
-    local names = table.concat(joining, ", ")
-    if #unable > 0 then names = names .. (names ~= "" and "\n" or "") .. "Unable: " .. table.concat(unable, ", ") end
-    U.whoNames:SetText(names)
+        or "Joining " .. #joining .. (#unable > 0 and (" / " .. #unable .. " unable") or ""))
     U.readerState:SetText(state(entry))
     local open = not entry.cancelled and entry.expires > E.Client.Now()
     local canAnswer = open and not entry.own
     U.lineField:GetParent():SetShown(canAnswer); U.lineField.caption:SetShown(canAnswer)
+    U.lineButton:SetShown(canAnswer)
+    if not canAnswer then U.lineSheet:Hide() end
     if canAnswer then
         local mine = entry.live and E.Sync.MyLine and E.Sync.MyLine(entry) or ""
-        if U.lineEntry ~= entry then U.lineEntry = entry; U.lineField:SetText(mine or ""); U.lineField:ClearFocus() end
+        if U.lineEntry ~= entry then U.lineEntry = entry; U.lineField:SetText(mine or ""); U.lineField:ClearFocus(); U.lineSheet:Hide() end
+        U.lineButton.label:SetText(U.lineField:GetText() ~= "" and "Edit your line" or "Add a line")
     end
     U.join:SetShown(open and not entry.own)
     U.decline:SetShown(open and not entry.own)
@@ -652,6 +795,11 @@ function U.ShowEntry(entry)
     U.edit:SetShown(open and entry.own)
     U.again:SetShown(entry.own == true)
     U.moderate:SetShown(open and not entry.own and officer())
+    local ready = E.Sync.Ready() or false
+    for _, button in ipairs({ U.join, U.decline, U.withdraw, U.edit, U.again, U.moderate, U.lineButton }) do button:SetEnabled(ready) end
+    U.SelectButton(U.join, entry.reply == "I will join"); U.SelectButton(U.decline, entry.reply == "Unable to attend")
+    U.join.label:SetText(entry.reply == "I will join" and "You're going" or "I will join")
+    U.SetVariant(U.join, entry.reply == "I will join" and "ink" or "seal")
 end
 
 -- Writing: what kind it is, when it starts by the realm's clock, how long it stays on the board,
@@ -701,6 +849,8 @@ function U.CreateWriter()
     end, "flat"), 788, -310)
     U.secretToggle:SetHeight(20)
     U.fields.body = U.Field(page, "Message", 244, -372, 654, 136, 1600, true)
+    U.bodyCount = at(U.FitText(U.Text(page, "", 14, C.paperMuted), 210, 18, false), 688, -372)
+    U.bodyCount:SetJustifyH("RIGHT")
     U.fields.body:SetScript("OnCursorChanged", function(self, _, y, _, height)
         -- Keep long text editable without allowing it to paint outside its field.
         if U.bodyScroll then U.bodyScroll:SetVerticalScroll(math.max(0, -y - U.bodyScroll:GetHeight() + height + 12)) end
@@ -721,7 +871,11 @@ function U.CreateWriter()
     U.reading[#U.reading + 1] = function(size) body:SetFont(STANDARD_TEXT_FONT, size, "") end
     for key, field in pairs(U.fields) do
         field:SetScript("OnTextChanged", function(self, user)
-            if user then U.draft[key] = self:GetText(); U.SaveDraft() end
+            if user then
+                U.draft[key] = self:GetText(); U.SaveDraft()
+                self.caption:SetText(key == "title" and "Subject" or key == "body" and "Message" or "Meeting place")
+                if U.bodyCount then U.bodyCount:SetText(#(U.draft.body or "") .. " / 1600 bytes") end
+            end
         end)
     end
     -- Tab moves on through the boxes (Shift and Tab moves back), and Enter moves on from the
@@ -747,7 +901,7 @@ function U.CreateWriter()
     U.calendar = sheet(page, 296, 212, 244, -220)
     U.calendarMonth = at(U.Text(U.calendar, "", 14, C.brown, nil, "caps"), 16, -10)
     for i, name in ipairs({ "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun" }) do
-        local head = at(U.FitText(U.Text(U.calendar, name, 13, C.paperMuted), 36, 14, false), 16 + (i - 1) * 38, -32)
+        local head = at(U.FitText(U.Text(U.calendar, name, 14, C.paperMuted), 36, 18, false), 16 + (i - 1) * 38, -32)
         head:SetJustifyH("CENTER")
     end
     U.dayCells = {}
@@ -780,6 +934,12 @@ end
 function U.Publish()
     if U.draft.secret then U.draft.location = "" end
     U.SaveDraft()
+    for _, key in ipairs({"title", "body"}) do
+        if E.Trim(U.draft[key] or "") == "" then
+            U.fields[key].caption:SetText(key == "title" and "Subject (required)" or "Message (required)")
+            U.fields[key]:SetFocus(); U.Status(key == "title" and "Enter a subject." or "Enter a message."); return
+        end
+    end
     local editing = U.editing
     local result, problem
     if editing then result, problem = E.Sync.Edit(editing, U.draft) else result, problem = E.Sync.Post(U.draft) end
@@ -797,6 +957,16 @@ end
 -- same day and time one week after the original (the next such week that has not begun). For a
 -- weekly evening that is all there is to do; any other day is chosen as usual.
 function U.PostAgain(entry)
+    local draft = S.GetDraft()
+    if E.Trim(draft.title or "") ~= "" or E.Trim(draft.body or "") ~= "" or E.Trim(draft.location or "") ~= "" then
+        U.Confirm("You already have an unfinished notice. Replace it with a copy of this notice?", "Replace with copy", function()
+            U.CopyNotice(entry)
+        end, "Keep my draft")
+        return
+    end
+    U.CopyNotice(entry)
+end
+function U.CopyNotice(entry)
     local now, today = E.Client.Now(), E.Client.DayStart()
     local start = entry.start + 7 * 86400
     while start <= now do start = start + 7 * 86400 end
@@ -813,6 +983,7 @@ function U.PostAgain(entry)
     U.Status("A copy, one week later. Check the day and time, then post.")
 end
 function U.StartEdit(entry)
+    U.editDraftEntry = nil
     U.editing = entry
     U.returnTab = U.tab == "Mine" and "Mine" or board(entry.categoryIndex)
     U.tab = "Write"
@@ -832,7 +1003,7 @@ end
 function U.LoadDraft()
     U.loading = true
     U.calendar:Hide(); U.clock:Hide()
-    if U.editing then
+    if U.editing and U.editDraftEntry ~= U.editing then
         local e = U.editing
         local days, hour, minute = 0, 20, 0
         if e.start and e.start > 0 then
@@ -844,12 +1015,16 @@ function U.LoadDraft()
         U.draft = { title = e.title, location = e.location, body = e.body, category = e.categoryIndex,
             hours = math.max(1, math.ceil((e.expires - e.start) / 3600)), route = 1, secret = e.categoryIndex ~= 4 and e.location == "",
             startDays = days, startHour = hour, startMinute = minute }
-    else
+        U.editDraftEntry = e
+    elseif not U.editing then
         U.draft = S.GetDraft(); U.draft.route = 1
         if U.composeBoard == "Noticeboard" then U.draft.category = 4
         elseif U.draft.category == 4 or not U.draft.category then U.draft.category = 1 end
     end
-    for key, field in pairs(U.fields) do field:SetText(clean(U.draft[key], key == "body" and 1600 or 100)); field:ClearFocus() end
+    for key, field in pairs(U.fields) do
+        field.caption:SetText(key == "title" and "Subject" or key == "body" and "Message" or "Meeting place")
+        field:SetText(clean(U.draft[key], key == "body" and 1600 or 100)); field:ClearFocus()
+    end
     U.loading = false; U.WriterLabels()
 end
 function U.WriterLabels()
@@ -900,60 +1075,72 @@ function U.WriterLabels()
     U.fields.location:SetEnabled(not secret)
     if secret then U.fields.location:SetText("Not told") end
     U.writerAction.label:SetText(locked and "Save changes" or "Post")
+    U.bodyCount:SetText(#(d.body or "") .. " / 1600 bytes")
     local party = E.Client.Channel() == "PARTY"
     if locked then
         U.writerHint:SetText("The kind, the start and the time on the board cannot change. Withdraw and post again for that.")
     elseif U.composeBoard == "Noticeboard" then
-        U.writerHint:SetText("Your draft is saved as you write. " .. (party and "Only the party leader can post guild events." or "Guild events require the guild leader or Flame Keeper rank."))
+        U.writerHint:SetText("Your draft is saved as you write. " .. (party and "Only the party leader can post guild events." or "Guild events require the guild leader, Flame Keeper or Officer Alt rank."))
     else
         U.writerHint:SetText("Your draft is saved as you write. It goes to your " .. (party and "party" or "guild") .. "; any member can answer.")
     end
 end
 
--- Settings: three short sections. Who to share with, how the ledger looks, and what this is.
+-- Everyday preferences first; sharing explanations and recovery controls open on demand.
 function U.CreateSettings()
     local page = newPage(); U.settings = page
-    -- Emberlight shares with the guild only (0.8.0); the party boards used for testing on Retail
-    -- are no longer offered.
-    caps(page, "Sharing with your guild", 244, -104)
-    U.syncToggle = at(U.Button(page, "", 170, function()
-        S.db.settings.guildSync = not S.db.settings.guildSync
-        E.Sync.Reset(); E.Client.RequestRoster(); U.Refresh(); U.Status()
-    end), 244, -128)
-    U.syncRefresh = at(U.Button(page, "Refresh", 150, function()
-        E.Client.RequestRoster()
-        U.Status(E.Sync.Refresh() and "Requested the latest notices." or "Wait 30 seconds before refreshing again.")
-    end), 422, -128)
-    U.permissions = at(U.FitText(U.Text(page, "", 14, C.ink, nil, "game"), 654, 38, true), 244, -176)
-    U.connectionHelp = at(U.FitText(U.Text(page, "", 15, C.paperMuted), 654, 40, true), 244, -218)
-    U.Rule(page, 244, -270, 654)
-    caps(page, "Appearance", 244, -282)
-    U.scaleStep = U.Stepper(page, "Window size", 244, -306, 200, function(direction)
+    caps(page, "Appearance", 244, -104)
+    U.scaleStep = U.Stepper(page, "Window size", 244, -130, 200, function(direction)
         local chosen = math.floor(S.db.settings.windowScale * 10 + .5) + direction
         S.db.settings.windowScale = math.max(8, math.min(14, chosen)) / 10
         U.ApplyScale(); U.RefreshSettings()
     end)
-    U.textStep = U.Stepper(page, "Reading text", 471, -306, 200, function(direction)
+    U.textStep = U.Stepper(page, "Reading text", 471, -130, 200, function(direction)
         local index = 2
         for i, option in ipairs(U.textSizes) do if option[1] == S.db.settings.textSize then index = i end end
         S.db.settings.textSize = U.textSizes[math.max(1, math.min(#U.textSizes, index + direction))][1]
         U.ApplyTextSize(); U.RefreshSettings()
     end)
-    at(U.Text(page, "Minimap button", 14, C.paperMuted), 698, -306)
+    at(U.Text(page, "Minimap button", 14, C.paperMuted), 698, -130)
     U.minimapToggle = at(U.Button(page, "", 200, function()
         S.db.settings.minimap.hide = not S.db.settings.minimap.hide
         U.PlaceLauncher(); U.RefreshSettings()
-    end), 698, -326)
-    at(U.Text(page, "Chat reminder", 14, C.paperMuted), 244, -370)
+    end), 698, -150)
+    U.resetWindow = at(U.Button(page, "Reset window", 150, function()
+        S.db.settings.windowScale = 1; S.db.settings.position = nil
+        U.frame:ClearAllPoints(); U.frame:SetPoint("CENTER"); U.ApplyScale(); U.RefreshSettings()
+    end, "bare"), 244, -188)
+    U.resetWindow:SetHeight(26)
+    at(U.Text(page, "Chat reminder", 14, C.paperMuted), 244, -230)
     U.reminderToggle = at(U.Button(page, "", 200, function()
         S.db.settings.reminders = not S.db.settings.reminders; U.RefreshSettings()
-    end), 244, -390)
-    at(U.FitText(U.Text(page, "One line in chat 15 minutes before something you said you will join, or are hosting.", 14, C.paperMuted), 430, 34, true), 468, -394)
-    U.Rule(page, 244, -436, 654)
-    caps(page, "About", 244, -448)
+    end), 698, -220)
+    at(U.FitText(U.Text(page, "One line 15 minutes before something you are joining or hosting.", 14, C.paperMuted), 654, 34, true), 244, -254)
+    U.Rule(page, 244, -296, 654)
+    caps(page, "About", 244, -308)
+    U.aboutVersion = at(U.Text(page, "Emberlight " .. E.version, 15, C.paperMuted), 244, -330)
+    U.sharingHelp = at(U.Button(page, "How sharing works +", 230, function()
+        U.settingsHelp = U.settingsHelp ~= "sharing" and "sharing" or nil; U.RefreshSettings()
+    end, "bare"), 244, -352)
+    U.connectionHelp = at(U.FitText(U.Text(page,
+        "Without the Companion, you receive a notice or answer when you and its writer are online with Emberlight at the same time. Received notices are kept on your computer. The Companion can also bring notices saved on the guild website into your next game session.",
+        15, C.paperMuted), 654, 100, true), 244, -386)
+    U.troubleshooting = at(U.Button(page, "Troubleshooting +", 230, function()
+        U.settingsHelp = U.settingsHelp ~= "trouble" and "trouble" or nil; U.RefreshSettings()
+    end, "bare"), 244, -390)
+    U.permissions = at(U.FitText(U.Text(page, "", 14, C.paperMuted), 654, 48, true), 244, -430)
+    U.syncToggle = at(U.Button(page, "", 170, function()
+        S.db.settings.guildSync = not S.db.settings.guildSync
+        E.Sync.Reset(); E.Client.RequestRoster(); U.Refresh(); U.Status()
+    end), 244, -482)
+    U.syncRefresh = at(U.Button(page, "Check for notices", 200, function()
+        E.Client.RequestRoster()
+        U.Status(E.Sync.Refresh() and "Checking for notices..." or "Wait 30 seconds before checking again.")
+    end), 422, -482)
+    U.reportHint = at(U.Text(page, "Click the details, then Ctrl+C, for a bug report:", 14, C.paperMuted), 244, -524)
     -- The version line doubles as the details for a bug report: a click selects all of it, ready
     -- for Ctrl+C (an addon cannot write the clipboard itself). Typing in it changes nothing.
-    U.buildInfo = at(CreateFrame("EditBox", nil, page), 244, -466)
+    U.buildInfo = at(CreateFrame("EditBox", nil, page), 244, -546)
     U.buildInfo:SetSize(654, 20)
     U.buildInfo:SetFont(STANDARD_TEXT_FONT, 14, "")
     U.buildInfo:SetTextColor(unpack(C.paperMuted))
@@ -965,17 +1152,22 @@ function U.CreateSettings()
         GameTooltip:SetOwner(self, "ANCHOR_TOP"); GameTooltip:SetText("Click, then Ctrl+C, to copy these details for a bug report.", 1, 1, 1, 1, true); GameTooltip:Show()
     end)
     U.buildInfo:SetScript("OnLeave", function() GameTooltip:Hide() end)
-    at(U.FitText(U.Text(page, "Notices reach members who are online with Emberlight. The Emberlight Companion app carries them to members who are not.", 15, C.paperMuted), 654, 40, true), 244, -496)
 end
 function U.RefreshSettings()
     local on = S.db.settings.guildSync
-    U.syncToggle.label:SetText(on and "Sharing is on" or "Turn sharing on")
-    U.SetVariant(U.syncToggle, on and "ink" or "seal")
+    U.syncToggle.label:SetText(on and "Pause messages" or "Resume messages")
+    U.SetVariant(U.syncToggle, "ink")
     U.syncRefresh:SetEnabled(E.Sync.Ready() or false)
-    local _, roster, me = E.Sync.Context()
-    U.permissions:SetText(roster and (clean(roster[me].rank, 80) .. "\n" .. (roster[me].officer and "You can post adventures and guild events." or "You can post adventures and answer guild events."))
-        or (on and E.Sync.Status() or "Sharing is off."))
-    U.connectionHelp:SetText("Notices go to members of your guild who use Emberlight. The guild master and the rank named Flame Keeper can post guild events.")
+    local _, roster, me = context()
+    local status = not on and "Messages are paused. Saved notices remain readable."
+        or E.Client.CommsBlocked() and "WoW has paused messages. Saved notices remain readable."
+        or E.Sync.Ready() and "Guild notices are checked automatically." or E.Sync.Status()
+    U.permissions:SetText(status .. (roster and ("\n" .. clean(roster[me].rank, 80) .. ": " .. (roster[me].officer and "You can post adventures and guild events." or "You can post adventures and answer guild events.")) or ""))
+    U.sharingHelp.label:SetText("How sharing works " .. (U.settingsHelp == "sharing" and "-" or "+"))
+    U.troubleshooting.label:SetText("Troubleshooting " .. (U.settingsHelp == "trouble" and "-" or "+"))
+    U.troubleshooting:ClearAllPoints(); at(U.troubleshooting, 244, U.settingsHelp == "sharing" and -494 or -390)
+    U.connectionHelp:SetShown(U.settingsHelp == "sharing")
+    for _, widget in ipairs({U.permissions,U.syncToggle,U.syncRefresh,U.reportHint,U.buildInfo}) do widget:SetShown(U.settingsHelp == "trouble") end
     local chosen = S.db.settings.windowScale
     local fits = chosen <= U.FitScale() + .001
     U.scaleStep.value:SetText(math.floor(chosen * 100 + .5) .. "%")
@@ -1002,15 +1194,15 @@ function U.ReportDetails()
         archive and date("%d %b %H:%M", archive) or "none")
 end
 
--- "Here now": a quick post that starts at once and leaves the board after an hour or two, for
+-- Quick post starts at once and leaves the board after an hour or two, for
 -- finding RP tonight. It is an ordinary adventure underneath, so every version of the addon sees it.
 function U.OpenHereNow()
     local s = U.nowSheet
     if not s then
         s = U.Paper(U.frame, 520, 316)
         s:SetPoint("CENTER", 91, 0); s:SetFrameLevel(U.frame:GetFrameLevel() + 40); s:EnableMouse(true)
-        at(U.Text(s, "Here now", 16, C.brown, nil, "caps"), 24, -20)
-        at(U.Text(s, "Say where you are and what is going on. It goes on the board at once.", 14, C.paperMuted, nil), 24, -42)
+        at(U.Text(s, "Quick post", 16, C.brown, nil, "caps"), 24, -20)
+        at(U.Text(s, "For an adventure starting now.", 14, C.paperMuted), 24, -42)
         s.kinds = {}
         for i, kind in ipairs({ 3, 2, 1 }) do
             local b = at(U.Button(s, E.categories[kind], 140, function() s.kind = kind; U.RefreshHereNow() end, "flat"), 24 + (i - 1) * 148, -68)
@@ -1063,7 +1255,7 @@ end
 function U.CheckReminders()
     U.UpdateLauncherBadge()
     local db = S.db
-    if not db or not db.settings.reminders or not E.Sync.Context() then return end
+    if not db or not db.settings.reminders or not E.Sync.ReadContext() then return end
     local now, done = E.Client.Now(), db.localData.reminded
     for id, start in pairs(done) do if start < now - 86400 then done[id] = nil end end
     for _, e in ipairs(E.Sync.List()) do
@@ -1071,8 +1263,10 @@ function U.CheckReminders()
             done[e.id] = e.start
             local minutes = math.max(1, math.floor((e.start - now) / 60 + .5))
             local place = E.Clean(e.location, 100)
+            local own = E.Client.LocalClock(e.start)
             DEFAULT_CHAT_FRAME:AddMessage("Emberlight: " .. E.Clean(e.title, 100) .. " starts in " .. minutes .. " min, at " .. E.Client.Clock(e.start)
-                .. " server time" .. (place ~= "" and (", " .. place) or "") .. ".", .91, .78, .46)
+                .. " server time" .. (own ~= E.Client.Clock(e.start) and (" (" .. own .. " your time)") or "")
+                .. (place ~= "" and (", " .. place) or "") .. ".", .91, .78, .46)
         end
     end
 end

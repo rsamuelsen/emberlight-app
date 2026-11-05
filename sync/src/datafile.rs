@@ -3,6 +3,7 @@
 //! WoW loads addon files at login and `/reload` and never writes them back, so updating this
 //! folder cannot race the game's own SavedVariables save.
 
+use crate::api::RosterCheck;
 use crate::lua::{self, Value, field};
 use crate::records::{self, Notice, Removed, Reply, Skipped};
 use anyhow::{Context, Result, bail};
@@ -14,6 +15,14 @@ use std::path::{Path, PathBuf};
 pub const ADDON_DIR: &str = "Emberlight_Data";
 pub const FORMAT: i64 = 1;
 const GLOBAL: &str = "EmberlightArchive";
+/// The officers' roster check, in a file of its own beside Data.lua (`Roster.lua`, global
+/// `EmberlightRoster`). Addons before 0.8.12 never read it.
+pub const ROSTER_FILE: &str = "Roster.lua";
+const ROSTER_GLOBAL: &str = "EmberlightRoster";
+pub const ROSTER_FORMAT: i64 = 1;
+/// Limits that keep a damaged reply from writing a huge file; far above any real guild.
+const ROSTER_MEMBERS: usize = 2000;
+const ROSTER_CHARACTERS: usize = 50;
 
 /// Lua 5.1 string literal. Every byte that could end the literal or confuse a reader is escaped;
 /// UTF-8 passes through unchanged.
@@ -128,6 +137,58 @@ pub fn render_data(archive: &Archive) -> String {
     s
 }
 
+/// A name or rank for the roster file: ordinary text of a sensible length, nothing else.
+fn roster_text(s: &str, max: usize) -> bool {
+    !s.is_empty() && s.chars().count() <= max && !s.chars().any(|c| c.is_control() || c == '|')
+}
+
+/// A character's key as the addon makes it from an in-game name (`C.Canonical`, before the realm):
+/// lower case, "_" for a space, no "-".
+fn roster_key(s: &str) -> bool {
+    roster_text(s, 120) && !s.contains('-') && !s.chars().any(char::is_whitespace) && !s.chars().any(|c| c.is_ascii_uppercase())
+}
+
+/// The roster file. `None` (not an officer) writes a file with no list, so a list written for an
+/// officer earlier never stays on a computer whose member is not one now.
+pub fn render_roster(roster: Option<&RosterCheck>) -> String {
+    let mut s = String::from("-- Written by the Emberlight sync tool. Replaced on every sync; edits here are lost.\n");
+    let Some(roster) = roster else {
+        s.push_str("-- Only officers get the member list for the roster check.\n");
+        return s;
+    };
+    s.push_str("-- The guild's members for the officers' roster check. Keep this computer's files private.\n");
+    s.push_str(&format!(
+        "{ROSTER_GLOBAL} = {{\n\tformat = {ROSTER_FORMAT},\n\tgenerated = {},\n\tfresh = {},\n\tmembers = {{\n",
+        roster.generated, roster.fresh
+    ));
+    for m in roster.members.iter().take(ROSTER_MEMBERS) {
+        let characters: Vec<_> = m.characters.iter().filter(|c| roster_text(&c.name, 60) && roster_key(&c.key)).take(ROSTER_CHARACTERS).collect();
+        if characters.is_empty() {
+            continue;
+        }
+        let rank = |v: &Option<String>| v.as_deref().filter(|r| roster_text(r, 40)).map_or("nil".to_owned(), lua_string);
+        s.push_str(&format!(
+            "\t\t{{ rank = {}, inGameRank = {}, altRank = {}, characters = {{\n",
+            rank(&m.rank),
+            rank(&m.in_game_rank),
+            rank(&m.alt_rank)
+        ));
+        for c in characters {
+            s.push_str(&format!("\t\t\t{{ name = {}, key = {}, main = {} }},\n", lua_string(&c.name), lua_string(&c.key), c.main));
+        }
+        s.push_str("\t\t} },\n");
+    }
+    s.push_str("\t},\n}\n");
+    s
+}
+
+/// Write `<addons>/Emberlight_Data/Roster.lua`. Callers must first confirm the game is not running.
+pub fn write_roster(addons: &Path, roster: Option<&RosterCheck>) -> Result<()> {
+    let dir = addons.join(ADDON_DIR);
+    fs::create_dir_all(&dir).with_context(|| format!("cannot create {}", dir.display()))?;
+    write_atomic(&dir.join(ROSTER_FILE), render_roster(roster).as_bytes())
+}
+
 /// Read back an archive written by `render_data` (used by tests and to report what is installed).
 pub fn read_data(src: &[u8]) -> Result<Archive> {
     let globals = lua::parse(src)?;
@@ -211,7 +272,7 @@ pub fn read_interface(addons: &Path) -> Result<String> {
 
 pub fn render_toc(interface: &str) -> String {
     format!(
-        "## Interface: {interface}\n## Title: Emberlight Data\n## Notes: Guild records downloaded by the Emberlight sync tool.\n## Author: Emberlight\n## Version: {FORMAT}\nData.lua\n"
+        "## Interface: {interface}\n## Title: Emberlight Data\n## Notes: Guild records downloaded by the Emberlight sync tool.\n## Author: Emberlight\n## Version: {FORMAT}\nData.lua\nRoster.lua\n"
     )
 }
 
@@ -242,6 +303,10 @@ pub struct WriteReport {
     pub dir: PathBuf,
     pub written: usize,
     pub rejected: Vec<Skipped>,
+    /// Members in the officers' roster check, when one was written.
+    pub roster: Option<usize>,
+    /// Why the roster check could not be downloaded (the one from the last sync stays).
+    pub roster_problem: Option<String>,
 }
 
 /// Validate and install records into `<addons>/Emberlight_Data`. Callers must first confirm the
@@ -289,8 +354,13 @@ pub fn write_data_addon(addons: &Path, archive: &Archive) -> Result<WriteReport>
     fs::create_dir_all(&dir).with_context(|| format!("cannot create {}", dir.display()))?;
     let out = Archive { generated: archive.generated, notices: accepted, replies, removed };
     write_atomic(&dir.join("Data.lua"), render_data(&out).as_bytes())?;
+    // The TOC names Roster.lua: make sure there is one, without a list, until a sync writes it.
+    let roster = dir.join(ROSTER_FILE);
+    if !roster.exists() {
+        write_atomic(&roster, render_roster(None).as_bytes())?;
+    }
     write_atomic(&dir.join(format!("{ADDON_DIR}.toc")), render_toc(&interface).as_bytes())?;
-    Ok(WriteReport { dir, written: out.notices.len(), rejected })
+    Ok(WriteReport { dir, written: out.notices.len(), rejected, roster: None, roster_problem: None })
 }
 
 #[cfg(test)]
@@ -312,6 +382,44 @@ mod tests {
         let archive = Archive { generated: 1, notices: vec![notice], replies: vec![with_line.clone(), without.clone()], removed: vec![] };
         let back = read_data(render_data(&archive).as_bytes()).unwrap();
         assert_eq!(back.replies, vec![with_line, without]);
+    }
+
+    #[test]
+    fn roster_file_holds_only_valid_entries_and_nothing_for_non_officers() {
+        use crate::api::{RosterCharacter, RosterMember};
+        let ch = |name: &str, key: &str, main: bool| RosterCharacter { name: name.into(), key: key.into(), main };
+        let roster = RosterCheck {
+            generated: 1_800_000_000,
+            fresh: true,
+            checked_at: Some(1),
+            members: vec![
+                RosterMember { rank: Some("kindled".into()), in_game_rank: Some("Ember".into()), alt_rank: Some("Alt".into()), characters: vec![ch("Alice \"Q\" Example", "alice_\"q\"_example", true), ch("Bad", "Bad-Realm", false), ch("Bob Example", "bob_example", false)] },
+                RosterMember { rank: None, in_game_rank: None, alt_rank: None, characters: vec![ch("Carol|Example", "carol_example", false)] },
+                RosterMember { rank: None, in_game_rank: None, alt_rank: None, characters: vec![ch("Dan Example", "dan_example", false)] },
+            ],
+        };
+        let text = render_roster(Some(&roster));
+        let parsed = lua::parse(text.as_bytes()).unwrap();
+        let list = parsed["EmberlightRoster"].as_table().unwrap();
+        assert_eq!(field(list, "generated").and_then(Value::as_int), Some(1_800_000_000));
+        let members = field(list, "members").and_then(Value::as_table).unwrap();
+        assert_eq!(members.len(), 2, "a member with no valid character is left out");
+        assert!(text.contains("alice_\\\"q\\\"_example") && text.contains("main = true") && text.contains("rank = nil") && text.contains("altRank = \"Alt\""));
+        assert!(!text.contains("Bad-Realm") && !text.contains("Carol"));
+        let none = render_roster(None);
+        assert!(lua::parse(none.as_bytes()).unwrap().is_empty() && !none.contains("Alice"));
+
+        let dir = tempfile::tempdir().unwrap();
+        let addon = dir.path().join("Emberlight");
+        fs::create_dir_all(&addon).unwrap();
+        fs::write(addon.join("Emberlight.toc"), "## Interface: 16001\n").unwrap();
+        write_roster(dir.path(), Some(&roster)).unwrap();
+        write_data_addon(dir.path(), &Archive::default()).unwrap();
+        let data = dir.path().join(ADDON_DIR);
+        assert!(fs::read_to_string(data.join(ROSTER_FILE)).unwrap().contains("Bob Example"), "writing the notices keeps the roster");
+        assert!(fs::read_to_string(data.join(format!("{ADDON_DIR}.toc"))).unwrap().ends_with("Data.lua\nRoster.lua\n"));
+        write_roster(dir.path(), None).unwrap();
+        assert!(!fs::read_to_string(data.join(ROSTER_FILE)).unwrap().contains("Bob"));
     }
 
     #[test]

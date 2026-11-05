@@ -108,6 +108,12 @@ fn report_write(report: &datafile::WriteReport) {
         eprintln!("rejected {} in {}: {}", s.id, s.scope, s.reason);
     }
     println!("Wrote {} notice(s) to {}", report.written, report.dir.display());
+    if let Some(n) = report.roster {
+        println!("Wrote the roster check ({n} member(s)).");
+    }
+    if let Some(problem) = &report.roster_problem {
+        eprintln!("The roster check was not updated: {problem}");
+    }
 }
 
 #[derive(Deserialize)]

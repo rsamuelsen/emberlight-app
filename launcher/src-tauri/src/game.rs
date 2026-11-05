@@ -163,6 +163,14 @@ fn sync_inner(settings: &Settings, token: &str, report: &mut SyncReport) -> Resu
     };
     let written = flow::pull(&client, &paths::addons_dir(&dir), still_closed).map_err(|e| e.to_string())?;
     report.downloaded = Some(written.written);
+    // Officers only: the roster check could not be updated (the notices were).
+    if let Some(problem) = written.roster_problem {
+        let line = format!("The roster check was not updated: {problem}.");
+        report.note = Some(match report.note.take() {
+            Some(note) => format!("{note} {line}"),
+            None => line,
+        });
+    }
     Ok(())
 }
 

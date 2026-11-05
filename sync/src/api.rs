@@ -85,6 +85,47 @@ pub struct Download {
     pub removed: Vec<Removed>,
 }
 
+/// One verified character in the officers' roster check: its name as members read it, and its
+/// identity's name part (`key`: lower case, a space as "_", no realm), which the addon matches with
+/// the in-game guild.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct RosterCharacter {
+    pub name: String,
+    pub key: String,
+    #[serde(default)]
+    pub main: bool,
+}
+
+/// A current member: their Discord rank (`guildMaster`, `keeper`, `veteran`, `kindled`,
+/// `wayfarer`, or none), the in-game rank for their main and for their alts, and their verified
+/// characters, main first.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RosterMember {
+    #[serde(default)]
+    pub rank: Option<String>,
+    #[serde(default)]
+    pub in_game_rank: Option<String>,
+    /// The in-game rank of this member's characters other than their main ("Alt", or
+    /// "Officer Alt" for an officer's).
+    #[serde(default)]
+    pub alt_rank: Option<String>,
+    pub characters: Vec<RosterCharacter>,
+}
+
+/// `GET /v1/officer/roster-check`: the website's member list for the addon's in-game roster check.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RosterCheck {
+    pub generated: i64,
+    /// Whether Warden's Discord roster (and so each rank) is up to date.
+    #[serde(default)]
+    pub fresh: bool,
+    #[serde(default)]
+    pub checked_at: Option<i64>,
+    pub members: Vec<RosterMember>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Announcement {
@@ -334,6 +375,24 @@ impl Client {
 
     pub fn me(&self) -> Result<Me> {
         self.send(self.http.get(self.url("/v1/me")))
+    }
+
+    /// The officers' roster check, or `None` when this member is not an officer (or the server is
+    /// older than the roster check): then nothing of the member list may be kept on this computer.
+    pub fn roster_check(&self) -> Result<Option<RosterCheck>> {
+        let res = self.http.get(self.url("/v1/officer/roster-check")).bearer_auth(&self.token).send().context("could not reach the Emberlight server")?;
+        if matches!(res.status(), StatusCode::FORBIDDEN | StatusCode::NOT_FOUND) {
+            return Ok(None);
+        }
+        if res.status() == StatusCode::UNAUTHORIZED {
+            bail!("the server did not accept your sign-in; sign in again");
+        }
+        if !res.status().is_success() {
+            let status = res.status();
+            let message = res.json::<ErrorBody>().map(|e| e.error).unwrap_or_else(|_| format!("the server refused the request ({status})"));
+            bail!("{message}");
+        }
+        Ok(Some(res.json().context("the server sent an unexpected reply")?))
     }
 
     pub fn download(&self) -> Result<Download> {

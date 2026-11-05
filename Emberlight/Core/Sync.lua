@@ -50,6 +50,21 @@ function N.Context()
     end
     return scope, roster, me
 end
+-- Reading saved notices must not require sending messages. Never use this context for a
+-- mutation: it neither imports data nor creates a board, and still checks the current guild.
+function N.ReadContext()
+    local scope, roster, me = N.Context()
+    if scope then return scope, roster, me end
+    local db = E.Store.db
+    if not db or db.settings.demo then return nil end
+    local key = C.ScopeKey()
+    if not key then return nil end
+    roster = C.Roster(); me = C.Canonical(C.Name())
+    if not roster[me] then return nil end
+    local boards = db[C.Channel() == "PARTY" and "partyData" or "guildData"]
+    scope = boards and boards[key]
+    if scope then return scope, roster, me end
+end
 -- Closed supply requests and their pledges go after CLOSED_SUPPLY_DAYS, and open ones after
 -- SUPPLY_DAYS, when peers would refuse them anyway. At most once a minute.
 function N.PruneSupplies(scope)
@@ -190,7 +205,8 @@ function N.Changed()
         if E.UI.tab == "Home" then E.UI.RefreshHome() end
         if E.UI.tab == "Supplies" then E.UI.RefreshSupplies() end
         if E.UI.tab == "Settings" then E.UI.RefreshSettings() end
-        if E.UI.connection then E.UI.connection:SetText(N.Status()) end
+        if E.UI.tab == "Roster" and E.UI.RefreshRoster then E.UI.RefreshRoster() end
+        if E.UI.UpdateConnection then E.UI.UpdateConnection() end
     end
 end
 function N.Status()
@@ -235,11 +251,11 @@ function N.Revision(after)
     return db.localData.syncSequence
 end
 function N.List()
-    local data, roster, me = N.Context()
+    local data, roster, me = N.ReadContext()
     local list = {}
     if not data then return list end
     for id, entry in pairs(data.entries) do
-        if entry.expires <= C.Now() then data.entries[id] = nil; data.replies[id] = nil; data.lines[id] = nil
+        if entry.expires <= C.Now() then data.entries[id] = nil; data.replies[id] = nil; if data.lines then data.lines[id] = nil end
         elseif roster[entry.owner] and (entry.categoryIndex ~= 4 or roster[entry.owner].officer) then
             entry.own = entry.owner == me
             local reply = (data.replies[id] or {})[me]
@@ -255,7 +271,7 @@ function N.Post(draft)
     if not N.Ready() or not data then return nil, "Turn sharing on in Settings, and be in the guild." end
     if draft.route ~= 1 then return nil, "Choose the noticeboard to post a notice." end
     local ok, problem = E.Store.Validate(draft); if not ok then return nil, problem end
-    if draft.category == 4 and not roster[me].officer then return nil, C.Channel()=="PARTY" and "Only the party leader can post official events." or "Official guild events require the guild leader or Flame Keeper rank." end
+    if draft.category == 4 and not roster[me].officer then return nil, C.Channel()=="PARTY" and "Only the party leader can post official events." or "Official guild events require the guild leader, Flame Keeper or Officer Alt rank." end
     N.List()
     local own = 0; for _, entry in pairs(data.entries) do if entry.owner == me then own = own + 1 end end
     if own >= 10 or count(data.entries) >= 200 then return nil, "The board is full. Wait for older notices to expire." end
@@ -345,8 +361,8 @@ function N.Reply(entry, response, line)
     return true
 end
 function N.MyLine(entry)
-    local data, _, me = N.Context()
-    local line = data and (data.lines[entry.id] or {})[me]
+    local data, _, me = N.ReadContext()
+    local line = data and ((data.lines or {})[entry.id] or {})[me]
     return line and line.text or ""
 end
 function N.Line(entry, text)
@@ -361,11 +377,11 @@ end
 -- Who answered a notice, by the names the roster knows: those joining, then those who cannot.
 -- The member's own answer is listed first, as "You". Names are shown without their realm.
 function N.Answers(entry)
-    local data, roster, me = N.Context()
+    local data, roster, me = N.ReadContext()
     local joining, unable = {}, {}
     if not data then return joining, unable end
     local mine
-    local lines = data.lines[entry.id] or {}
+    local lines = (data.lines or {})[entry.id] or {}
     local function named(actor, name)
         local line = lines[actor] and lines[actor].text or ""
         return line ~= "" and (name .. " (" .. line .. ")") or name
@@ -428,7 +444,7 @@ end
 function N.PostSupply(draft)
     local data, roster, me = N.Context()
     if not N.Ready() or not data then return nil, "Enable sharing in Settings and join the selected party or guild." end
-    if not roster[me].officer then return nil, C.Channel()=="PARTY" and "Only the party leader can post a supply request." or "Supply requests require the guild leader or Flame Keeper rank." end
+    if not roster[me].officer then return nil, C.Channel()=="PARTY" and "Only the party leader can post a supply request." or "Supply requests require the guild leader, Flame Keeper or Officer Alt rank." end
     local title, item, body, location = E.Trim(E.Clean(draft.title,100)), E.Trim(E.Clean(draft.item,100)), E.Trim(E.Clean(draft.body,800)), E.Clean(draft.location,100)
     if title == "" or item == "" or body == "" then return nil, "Complete the subject, material and message." end
     local goal = tonumber(draft.goal)
@@ -684,7 +700,10 @@ end
 function N.Tick()
     if N.dirty then N.dirty=false; N.Changed() end
     local ready = N.Ready()
-    if E.UI and E.UI.connection and E.UI.frame:IsShown() then E.UI.connection:SetText(N.Status()) end
+    if E.UI and E.UI.frame and E.UI.frame:IsShown() and (N.uiReady ~= ready or N.uiError ~= N.lastError) then
+        N.uiReady = ready; N.uiError = N.lastError
+        if E.UI.RefreshAvailability then E.UI.RefreshAvailability() end
+    end
     if not ready then return end
     if not N.lastHello or C.Now()-N.lastHello >= 180 then N.Refresh() end
     if N.snapshotAt and C.Now() >= N.snapshotAt then N.snapshotAt=nil; N.Snapshot() end

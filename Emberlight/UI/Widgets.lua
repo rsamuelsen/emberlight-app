@@ -59,7 +59,8 @@ function U.UpdateScroll(scroll)
     local child = scroll:GetScrollChild()
     local overflow = child and child:GetHeight() > scroll:GetHeight() + 1
     if scroll.ScrollBar then scroll.ScrollBar:SetShown(overflow == true) end
-    if not overflow and scroll:GetVerticalScroll() > 0 then scroll:SetVerticalScroll(0) end
+    local max = child and math.max(0, child:GetHeight() - scroll:GetHeight()) or 0
+    if scroll:GetVerticalScroll() > max then scroll:SetVerticalScroll(max) end
 end
 
 function U.Scroll(parent, width, height)
@@ -93,10 +94,9 @@ end
 function U.Text(parent, text, size, color, width, face)
     local t = parent:CreateFontString(nil, "OVERLAY")
     size = size or 14
-    -- "title" is a heading. "game" is text at exactly the size given (what a member wrote). Labels
-    -- and the small "caps" captions were sized for a narrower face, so they are set a little smaller.
+    -- Keep labels readable too; only the member's chosen reading size may be smaller than 14.
     if face == "title" then t:SetFont(U.fonts.title, size, "")
-    else t:SetFont(STANDARD_TEXT_FONT, face == "game" and size or face == "caps" and size - 2 or size - 1, "") end
+    else t:SetFont(STANDARD_TEXT_FONT, math.max(14, size), "") end
     -- A font that will not load would leave the text invisible; the standard font always loads.
     if not t:GetFont() then t:SetFont(STANDARD_TEXT_FONT, size, "") end
     t:SetTextColor(unpack(color or U.colors.ink))
@@ -266,21 +266,27 @@ function U.ScrollText(parent, width, height, color)
     child:SetSize(width - 32, height)
     scroll:SetScrollChild(child)
     local text = U.Text(child, "", U.TextSize(), color, width - 32, "game")
+    text:SetFont(STANDARD_TEXT_FONT, U.TextSize(), "")
     text:SetWordWrap(true); text:SetNonSpaceWrap(true)
     text:SetPoint("TOPLEFT")
     scroll.text = text
+    scroll.Reflow = function(self)
+        local w = self:GetWidth() - 6
+        child:SetWidth(w); text:SetWidth(w)
+        child:SetHeight(math.max(self:GetHeight(), text:GetStringHeight() + 12))
+        U.UpdateScroll(self)
+    end
     scroll.SetContent = function(self, content)
         if self.content == content then U.UpdateScroll(self); return end
         self.content = content
         text:SetText(content)
-        child:SetHeight(math.max(height, text:GetStringHeight() + 12))
+        self:Reflow()
         self:SetVerticalScroll(0)
         U.UpdateScroll(self)
     end
     U.reading[#U.reading + 1] = function(size)
         text:SetFont(STANDARD_TEXT_FONT, size, "")
-        child:SetHeight(math.max(height, text:GetStringHeight() + 12))
-        U.UpdateScroll(scroll)
+        scroll:Reflow()
     end
     return scroll
 end
@@ -301,7 +307,12 @@ function U.Stepper(parent, label, x, y, width, step, size)
 end
 -- The line at the foot of the page: what just happened, or why something could not.
 function U.Status(message)
-    if U.status then U.status:SetText(message or "") end
+    if U.statusTimer then U.statusTimer:Cancel(); U.statusTimer = nil end
+    if not U.status then return end
+    U.status:SetText(message or "")
+    if message and message ~= "" then
+        U.statusTimer = C_Timer.NewTimer(8, function() U.status:SetText(""); U.statusTimer = nil end)
+    end
 end
 -- "in 2 days": how soon something starts, for lists and the reader.
 function U.Until(timestamp)

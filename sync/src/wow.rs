@@ -63,6 +63,18 @@ pub fn running_clients(root: Option<&Path>) -> Vec<String> {
     Clients::new().running(root)
 }
 
+/// Whether the Battle.net app is running (also when it sits in the tray). A start command sent to
+/// a running Battle.net starts the game at once; one that opens Battle.net only shows the game.
+pub fn battle_net_running() -> bool {
+    let mut system = System::new_with_specifics(RefreshKind::nothing());
+    system.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing());
+    system.processes().values().any(|p| is_battle_net(&p.name().to_string_lossy().to_lowercase()))
+}
+
+fn is_battle_net(name: &str) -> bool {
+    name == "battle.net.exe" || name == "battle.net"
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -80,5 +92,7 @@ mod tests {
         assert!(!check("blizzarderror.exe", &inside("BlizzardError.exe")));
         assert!(!check("battle.net.exe", &inside("Battle.net.exe")));
         assert!(!check("notepad.exe", &PathBuf::from("windows").join("notepad.exe")));
+        assert!(is_battle_net("battle.net.exe") && is_battle_net("battle.net"));
+        assert!(!is_battle_net("battle.net helper.exe") && !is_battle_net("agent.exe"));
     }
 }

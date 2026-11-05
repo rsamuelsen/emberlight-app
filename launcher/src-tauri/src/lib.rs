@@ -540,7 +540,8 @@ fn close_window(app: AppHandle) {
 
 /// Watch for the game for as long as the app is open, however it was started (Play here, or
 /// Battle.net directly). When it starts or closes the window is told, and when it closes what it
-/// saved is synced. A direct start and the Battle.net fallback each get a minute to appear.
+/// saved is synced. Battle.net that is still opening is asked again every few seconds; then a
+/// Battle.net start and a direct start each get a minute to appear.
 fn monitor_game(app: AppHandle) {
     std::thread::spawn(move || {
         let mut clients = wow::Clients::new();
@@ -551,6 +552,11 @@ fn monitor_game(app: AppHandle) {
             let running = !clients.running(game::root(&state.settings()).ok().as_deref()).is_empty();
             if running == seen {
                 let mut launched = state.launched.lock().expect("launch lock");
+                // Battle.net is still opening: ask it again to start the game (see game::nudge_battle_net).
+                if !running && let Some((at, method @ game::LaunchMethod::BattleNetOpening { .. })) = *launched {
+                    if at.elapsed() >= game::BATTLE_NET_RETRY { *launched = Some((Instant::now(), game::nudge_battle_net(&state.settings(), method))); }
+                    continue;
+                }
                 if !running && launched.is_some_and(|(at, _)| at.elapsed() >= Duration::from_secs(60)) {
                     if launched.is_some_and(|(_, method)| method == game::LaunchMethod::Direct) && game::fallback_launch(&state.settings()).is_ok() {
                         *launched = Some((Instant::now(), game::LaunchMethod::BattleNet));

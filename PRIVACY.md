@@ -12,12 +12,13 @@ normal saved file (`WTF/Account/<account>/SavedVariables/Emberlight.lua`). That'
 
 | What | Why | Sent anywhere? |
 |---|---|---|
-| Where WoW and Battle.net are installed (Blizzard's own registry entries, then the usual folders) | To find the game and start its client directly, with Battle.net as a fallback ([`paths.rs`](sync/src/paths.rs)) | No |
+| Where WoW and Battle.net are installed (Blizzard's own registry entries, then the usual folders) | To find the game and start it through Battle.net, which signs you in (on a Mac the client is started directly first) ([`paths.rs`](sync/src/paths.rs)) | No |
 | The addon's saved file, `Emberlight.lua`, for each WoW account in the game folder | To pick up what you posted in game | Only your own posts (see below) |
 | The names of the character folders the game makes under `WTF/Account` | To suggest characters you might link on the website | **No**, shown in the app only |
 | Battle.net’s `.flavor.info` and `.build.info`, and client filenames in the chosen game folder | To recognise Forever, show its version and find the game client | No |
 | The installed addon's version, and `Emberlight_Data` | To offer updates and show events | No |
-| Which programs are running, every 3 seconds, on your computer only | To notice WoW opening and closing, so it never changes addon files while you play and syncs after you log out ([`wow.rs`](sync/src/wow.rs)) | No |
+| Which programs are running, every 3 seconds, on your computer only | To notice WoW opening and closing, so it never changes addon files while you play and syncs after you log out, and whether Battle.net is open when you press Play ([`wow.rs`](sync/src/wow.rs)) | No |
+| Battle.net's own log files, for a few seconds after you press Play while Battle.net was closed (Windows only) | Only to see whether Battle.net has started the game, so it is not asked twice. Nothing else in them is kept | No |
 
 It never writes to your saved files. The only game folders it changes are
 `Interface/AddOns/Emberlight` (when it installs an addon update; the previous version is kept so you

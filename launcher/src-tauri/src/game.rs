@@ -1,7 +1,8 @@
 //! Finding World of Warcraft, syncing and starting its client.
 //!
-//! Start the selected game client directly; use Battle.net only if it cannot start.
-//! Credentials stay with the game and Battle.net.
+//! Start the game through Battle.net, which signs the member in; start the client directly only
+//! when Battle.net cannot (on macOS the client is still started directly first). Credentials stay
+//! with the game and Battle.net.
 
 use crate::store::{Settings, SyncReport};
 use emberlight_sync::{api, datafile, flow, lua, paths, records, update, wow};
@@ -9,7 +10,7 @@ use serde::Serialize;
 use std::path::{Path, PathBuf};
 #[cfg(any(windows, target_os = "macos"))]
 use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub fn now() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
@@ -280,17 +281,38 @@ fn client_executable(dir: &Path) -> Option<PathBuf> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LaunchMethod { Direct, BattleNet }
+pub enum LaunchMethod {
+    Direct,
+    BattleNet,
+    /// Battle.net was closed. It opens on the game's page but ignores the start command while it
+    /// loads, so the command is sent again (`tries` so far) until the game appears, Battle.net's log
+    /// shows it started the game, or the tries run out. The member can always press Play there.
+    BattleNetOpening { since: SystemTime, tries: u8 },
+}
+
+/// How long to wait between start commands while Battle.net opens, and how many to send again.
+pub const BATTLE_NET_RETRY: Duration = Duration::from_secs(12);
+const BATTLE_NET_TRIES: u8 = 3;
 
 pub fn launch(settings: &Settings) -> Result<LaunchMethod, String> {
     let dir = paths::flavor_dir(&root(settings)?, &settings.flavor).map_err(|e| e.to_string())?;
     launch_from(&dir)
 }
 
+/// Battle.net's launch code for a product named in `.flavor.info`. The codes are case-sensitive and
+/// not always the product: when Play is pressed Battle.net's log names Forever "WoWF", and
+/// "launch wowf" does nothing (tested on Windows, 5 November 2026).
+fn launch_code(product: &str) -> &str {
+    match product {
+        "wow" => "WoW",
+        "wowf" => "WoWF",
+        other => other,
+    }
+}
+
 fn battle_net_argument(dir: &Path) -> Result<String, String> {
     let product = paths::game_product(dir).ok_or("The Battle.net product could not be identified. Start the game from Battle.net.")?;
-    let code = if product == "wow" { "WoW" } else { product.as_str() };
-    Ok(format!("--exec=\"launch {code}\""))
+    Ok(format!("--exec=\"launch {}\"", launch_code(&product)))
 }
 
 pub fn fallback_launch(settings: &Settings) -> Result<LaunchMethod, String> {
@@ -299,18 +321,85 @@ pub fn fallback_launch(settings: &Settings) -> Result<LaunchMethod, String> {
     Ok(LaunchMethod::BattleNet)
 }
 
+/// While Battle.net opens: send the start command again, unless Battle.net has already started the
+/// game. Returns what to wait for next.
+pub fn nudge_battle_net(settings: &Settings, method: LaunchMethod) -> LaunchMethod {
+    let LaunchMethod::BattleNetOpening { since, tries } = method else { return method };
+    let dir = root(settings).ok().and_then(|r| paths::flavor_dir(&r, &settings.flavor).ok());
+    let product = dir.as_deref().and_then(paths::game_product);
+    next_nudge(since, tries, product.is_some_and(|p| battle_net_started(since, &p)), || {
+        dir.as_deref().ok_or_else(|| "no game folder".to_owned()).and_then(battle_net_argument).and_then(|a| launch_battle_net(&a))
+    })
+}
+
+fn next_nudge(since: SystemTime, tries: u8, started: bool, send: impl FnOnce() -> Result<(), String>) -> LaunchMethod {
+    if started || send().is_err() || tries + 1 >= BATTLE_NET_TRIES { return LaunchMethod::BattleNet; }
+    LaunchMethod::BattleNetOpening { since, tries: tries + 1 }
+}
+
+/// Whether Battle.net's own log, written since `since`, says it is starting `product` (the line
+/// "LaunchBinary: uid=wowf ..." it writes when Play is pressed), so it is not asked twice.
+#[cfg(windows)]
+fn battle_net_started(since: SystemTime, product: &str) -> bool {
+    use std::io::{Read, Seek, SeekFrom};
+    let Some(logs) = std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("Battle.net").join("Logs")) else { return false };
+    let Ok(entries) = std::fs::read_dir(logs) else { return false };
+    let needle = format!("launchbinary: uid={}", product.to_ascii_lowercase());
+    entries.filter_map(Result::ok).filter(|e| {
+        let name = e.file_name().to_string_lossy().to_ascii_lowercase();
+        name.starts_with("battle.net") && name.ends_with(".log")
+            && e.metadata().and_then(|m| m.modified()).is_ok_and(|m| m >= since)
+    }).any(|e| {
+        let Ok(mut file) = std::fs::File::open(e.path()) else { return false };
+        let length = file.metadata().map(|m| m.len()).unwrap_or(0);
+        let _ = file.seek(SeekFrom::Start(length.saturating_sub(256 * 1024)));
+        let mut tail = Vec::new();
+        file.read_to_end(&mut tail).is_ok() && String::from_utf8_lossy(&tail).to_ascii_lowercase().contains(&needle)
+    })
+}
+
+#[cfg(not(windows))]
+fn battle_net_started(_since: SystemTime, _product: &str) -> bool {
+    false
+}
+
+#[cfg(target_os = "macos")]
 fn finish_launch(direct: Result<(), String>, dir: &Path, fallback: impl FnOnce(&str) -> Result<(), String>) -> Result<LaunchMethod, String> {
     if direct.is_ok() { return Ok(LaunchMethod::Direct); }
     fallback(&battle_net_argument(dir)?).map(|_| LaunchMethod::BattleNet)
         .map_err(|error| format!("The game could not be started directly or through Battle.net. {error}"))
 }
 
+/// Battle.net first, because a game it starts is signed in; a client started directly asks the
+/// member to log in. Battle.net that is already open starts the game at once; one that was closed
+/// is nudged again by `nudge_battle_net`. The client is started directly only if Battle.net cannot.
+#[cfg(any(not(target_os = "macos"), test))]
+fn start_through_battle_net(
+    argument: Result<String, String>,
+    open: bool,
+    since: SystemTime,
+    battle_net: impl FnOnce(&str) -> Result<(), String>,
+    direct: impl FnOnce() -> Result<(), String>,
+) -> Result<LaunchMethod, String> {
+    let through = argument.and_then(|a| battle_net(&a));
+    match through {
+        Ok(()) if open => Ok(LaunchMethod::BattleNet),
+        Ok(()) => Ok(LaunchMethod::BattleNetOpening { since, tries: 0 }),
+        Err(first) => direct().map(|_| LaunchMethod::Direct)
+            .map_err(|error| format!("The game could not be started through Battle.net or directly. {first} {error}")),
+    }
+}
+
+#[cfg(target_os = "macos")]
 fn launch_from(dir: &Path) -> Result<LaunchMethod, String> {
-    #[cfg(target_os = "macos")]
-    let direct = start_client(dir, dir);
-    #[cfg(not(target_os = "macos"))]
-    let direct = client_executable(dir).ok_or_else(|| "The game client was not found.".to_owned()).and_then(|exe| start_client(&exe, dir));
-    finish_launch(direct, dir, launch_battle_net)
+    finish_launch(start_client(dir, dir), dir, launch_battle_net)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn launch_from(dir: &Path) -> Result<LaunchMethod, String> {
+    start_through_battle_net(battle_net_argument(dir), wow::battle_net_running(), SystemTime::now(), launch_battle_net, || {
+        client_executable(dir).ok_or_else(|| "The game client was not found.".to_owned()).and_then(|exe| start_client(&exe, dir))
+    })
 }
 
 #[cfg(windows)]
@@ -361,14 +450,41 @@ mod tests {
     use super::*;
 
     #[test]
-    fn falls_back_only_when_direct_start_fails() {
+    fn starts_through_battle_net_and_directly_only_when_it_cannot() {
         let dir = std::env::temp_dir().join(format!("emberlight-fallback-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(".flavor.info"), "Product Flavor!STRING:0\nwowf\n").unwrap();
-        assert_eq!(finish_launch(Ok(()), &dir, |_| panic!("Battle.net must not open after a direct start")), Ok(LaunchMethod::Direct));
-        assert_eq!(finish_launch(Err("direct failed".into()), &dir, |arg| { assert_eq!(arg, "--exec=\"launch wowf\""); Ok(()) }), Ok(LaunchMethod::BattleNet));
-        assert!(finish_launch(Err("direct failed".into()), &dir, |_| Err("fallback failed".into())).unwrap_err().contains("fallback failed"));
+        let since = SystemTime::now();
+        let argument = || battle_net_argument(&dir);
+        assert_eq!(argument(), Ok("--exec=\"launch WoWF\"".to_owned()));
+        let no_direct = || -> Result<(), String> { panic!("the client must not start directly after Battle.net took it") };
+        assert_eq!(start_through_battle_net(argument(), true, since, |a| { assert_eq!(a, "--exec=\"launch WoWF\""); Ok(()) }, no_direct), Ok(LaunchMethod::BattleNet));
+        assert_eq!(start_through_battle_net(argument(), false, since, |_| Ok(()), no_direct), Ok(LaunchMethod::BattleNetOpening { since, tries: 0 }));
+        assert_eq!(start_through_battle_net(argument(), true, since, |_| Err("no Battle.net".into()), || Ok(())), Ok(LaunchMethod::Direct));
+        assert_eq!(start_through_battle_net(Err("unknown product".into()), true, since, |_| panic!("no code, no Battle.net"), || Ok(())), Ok(LaunchMethod::Direct));
+        let both = start_through_battle_net(argument(), true, since, |_| Err("no Battle.net.".into()), || Err("no client.".into())).unwrap_err();
+        assert!(both.contains("no Battle.net") && both.contains("no client"));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn launch_codes_keep_battle_net_case() {
+        assert_eq!(launch_code("wowf"), "WoWF");
+        assert_eq!(launch_code("wow"), "WoW");
+        assert_eq!(launch_code("wow_classic_beta"), "wow_classic_beta");
+    }
+
+    #[test]
+    fn nudges_battle_net_until_it_starts_the_game_or_tries_run_out() {
+        let since = SystemTime::now();
+        let sent = std::cell::Cell::new(0);
+        let send = || { sent.set(sent.get() + 1); Ok(()) };
+        assert_eq!(next_nudge(since, 0, false, send), LaunchMethod::BattleNetOpening { since, tries: 1 });
+        assert_eq!(next_nudge(since, 1, false, send), LaunchMethod::BattleNetOpening { since, tries: 2 });
+        assert_eq!(next_nudge(since, 2, false, send), LaunchMethod::BattleNet);
+        assert_eq!(sent.get(), 3);
+        assert_eq!(next_nudge(since, 0, true, || panic!("Battle.net already started the game")), LaunchMethod::BattleNet);
+        assert_eq!(next_nudge(since, 0, false, || Err("gone".into())), LaunchMethod::BattleNet);
     }
 
     #[test]

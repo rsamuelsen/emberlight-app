@@ -323,6 +323,12 @@ function U.Create()
     roster.badge = U.Text(roster, "", 15, C.goldHi); roster.badge:SetPoint("RIGHT", -12, 0)
     roster.badgeSeal = seal(roster, 13); roster.badgeSeal:SetPoint("RIGHT", roster.badge, "LEFT", -3, 0)
     U.tabs.Roster = roster
+    -- Crafting, for every member (UI/Crafting.lua): requests from the Companion and own professions.
+    local crafting = U.Button(f, U.labels.Crafting, 170, function() U.Go("Crafting") end, "nav")
+    crafting:SetHeight(34)
+    crafting.badge = U.Text(crafting, "", 15, C.goldHi); crafting.badge:SetPoint("RIGHT", -12, 0)
+    crafting.badgeSeal = seal(crafting, 13); crafting.badgeSeal:SetPoint("RIGHT", crafting.badge, "LEFT", -3, 0)
+    U.tabs.Crafting = crafting
     -- Settings is a place like the others, set a little apart under a thin gold rule.
     U.navRule = U.Rule(f, 40, -290, 142, { .788, .604, .247, .35 })
     U.settingsButton = at(U.Button(f, "Settings", 170, function() U.Go("Settings") end, "nav"), 26, -300)
@@ -365,6 +371,7 @@ function U.Create()
     U.CreateSettings()
     U.CreateSupplies()
     U.CreateRoster()
+    U.CreateCrafting()
     f:SetScript("OnShow", function()
         if InCombatLockdown and InCombatLockdown() then f:Hide(); return end
         U.timer = C_Timer.NewTicker(30, function()
@@ -393,12 +400,20 @@ function U.Refresh()
     -- "Your notices" is in the rail only while the member has something on a board.
     local showMine = mine > 0 or U.tab == "Mine" or (U.tab == "Write" and U.returnTab == "Mine")
     U.tabs.Mine:SetShown(showMine)
+    -- The places after Adventures, top to bottom: Crafting, Your notices, Roster check.
+    local y = -248
+    U.tabs.Crafting:ClearAllPoints(); at(U.tabs.Crafting, 26, y); y = y - 36
+    U.tabs.Mine:ClearAllPoints(); at(U.tabs.Mine, 26, y)
+    if showMine then y = y - 36 end
     -- The roster check only while the character holds officer rank in game.
     local showRoster = U.RosterAllowed()
     if U.tab == "Roster" and not showRoster then U.tab = "Home" end
     U.tabs.Roster:SetShown(showRoster)
-    U.tabs.Roster:ClearAllPoints(); at(U.tabs.Roster, 26, showMine and -284 or -248)
-    local below = (showMine and -294 or -258) - (showRoster and 36 or 0)
+    U.tabs.Roster:ClearAllPoints(); at(U.tabs.Roster, 26, y)
+    if showRoster then y = y - 36 end
+    local below = y - 10
+    -- Requests this member could make, as the Companion last brought them.
+    unread.Crafting = E.Professions.WaitingForMe()
     U.navRule:ClearAllPoints(); U.navRule:SetPoint("TOPLEFT", 40, below)
     U.settingsButton:ClearAllPoints(); at(U.settingsButton, 26, below - 10)
     for tab, button in pairs(U.tabs) do
@@ -423,6 +438,8 @@ function U.Refresh()
     U.settings:SetShown(U.tab == "Settings")
     U.supplies:Hide()
     U.rosterPage:SetShown(U.tab == "Roster")
+    U.craftPage:SetShown(U.tab == "Crafting")
+    if U.craftPage:IsShown() then U.RefreshCrafting() end
     if U.rosterPage:IsShown() then U.RefreshRoster() end
     if U.home:IsShown() then U.RefreshHome() end
     if U.reader:IsShown() then U.RefreshReader() end

@@ -1,6 +1,6 @@
 //! Client for the Emberlight server (server/ in this repository).
 
-use crate::records::{Notice, Proof, Removal, Removed, Reply};
+use crate::records::{Notice, ProfessionScan, Proof, Removal, Removed, Reply};
 use anyhow::{Context, Result, bail};
 use reqwest::blocking::{Client as Http, RequestBuilder};
 use reqwest::{StatusCode, Url};
@@ -111,6 +111,36 @@ pub struct RosterMember {
     #[serde(default)]
     pub alt_rank: Option<String>,
     pub characters: Vec<RosterCharacter>,
+}
+
+/// `GET /v1/professions/requests/game`: crafting requests this member can make, or asked for.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CraftRequests {
+    pub generated: i64,
+    pub requests: Vec<CraftRequest>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CraftRequest {
+    pub id: i64,
+    pub skill: String,
+    pub recipe: String,
+    pub quantity: i64,
+    pub for_character: String,
+    #[serde(default)]
+    pub note: String,
+    pub status: String,
+    #[serde(default)]
+    pub crafter: Option<String>,
+    #[serde(default)]
+    pub mine: bool,
+    #[serde(default)]
+    pub taken_by_me: bool,
+    #[serde(default)]
+    pub can_make_with: Vec<String>,
+    pub created_at: i64,
 }
 
 /// `GET /v1/officer/roster-check`: the website's member list for the addon's in-game roster check.
@@ -294,6 +324,34 @@ impl Client {
         Ok(out)
     }
 
+    /// This member's characters' professions (`POST /v1/professions/scans`), a few at a time.
+    pub fn upload_professions(&self, scans: &[ProfessionScan]) -> Result<Vec<UploadResult>> {
+        self.upload_scans("/v1/professions/scans", scans)
+    }
+
+    /// Guildmates' professions their addons shared in game (`POST /v1/professions/relayed`), for
+    /// members without the Companion. The server stores each share once.
+    pub fn upload_relayed_professions(&self, scans: &[ProfessionScan]) -> Result<Vec<UploadResult>> {
+        self.upload_scans("/v1/professions/relayed", scans)
+    }
+
+    fn upload_scans(&self, path: &str, scans: &[ProfessionScan]) -> Result<Vec<UploadResult>> {
+        #[derive(Serialize)]
+        struct Body<'a> {
+            characters: &'a [ProfessionScan],
+        }
+        #[derive(Deserialize)]
+        struct Reply2 {
+            results: Vec<UploadResult>,
+        }
+        let mut out = Vec::new();
+        for chunk in scans.chunks(5) {
+            let reply: Reply2 = self.send(self.http.post(self.url(path)).json(&Body { characters: chunk }))?;
+            out.extend(reply.results);
+        }
+        Ok(out)
+    }
+
     /// Character proofs this computer saw in game; the server matches them to waiting claims.
     pub fn upload_proofs(&self, proofs: &[Proof]) -> Result<Vec<UploadResult>> {
         #[derive(Serialize)]
@@ -391,6 +449,18 @@ impl Client {
             let status = res.status();
             let message = res.json::<ErrorBody>().map(|e| e.error).unwrap_or_else(|_| format!("the server refused the request ({status})"));
             bail!("{message}");
+        }
+        Ok(Some(res.json().context("the server sent an unexpected reply")?))
+    }
+
+    /// Crafting requests for the game, or `None` from a server without them (before 7 November 2026).
+    pub fn craft_requests(&self) -> Result<Option<CraftRequests>> {
+        let res = self.http.get(self.url("/v1/professions/requests/game")).bearer_auth(&self.token).send().context("could not reach the Emberlight server")?;
+        if matches!(res.status(), StatusCode::FORBIDDEN | StatusCode::NOT_FOUND) {
+            return Ok(None);
+        }
+        if !res.status().is_success() {
+            bail!("the server refused the request ({})", res.status());
         }
         Ok(Some(res.json().context("the server sent an unexpected reply")?))
     }

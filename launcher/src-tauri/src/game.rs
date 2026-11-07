@@ -141,7 +141,8 @@ fn sync_inner(settings: &Settings, token: &str, report: &mut SyncReport) -> Resu
     let files: Vec<_> = paths::saved_variables(&dir).into_iter().map(|a| a.path).collect();
     let pushed = flow::push(&client, &files, now()).map_err(|e| e.to_string())?;
     report.uploaded = pushed.notices + pushed.replies + pushed.removals;
-    report.stored = pushed.stored;
+    // Professions the website took count as updates too (addon 0.8.13).
+    report.stored = pushed.stored + pushed.professions;
     report.rejected = pushed.problems;
     // Own events in a guild the website does not sync are never uploaded: say so, or the sync
     // looks fine while nothing arrives (the beta once renumbered the guild's region).

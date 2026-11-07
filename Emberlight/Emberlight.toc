@@ -2,7 +2,7 @@
 ## Title: Emberlight
 ## Notes: Guild notices and correspondence.
 ## Author: Emberlight
-## Version: 0.8.12
+## Version: 0.8.13
 ## IconTexture: Interface\AddOns\Emberlight\Media\Crest
 ## AddonCompartmentFunc: Emberlight_OnAddonCompartmentClick
 ## SavedVariables: EmberlightDB
@@ -13,8 +13,10 @@ Core\Guild.lua
 Core\Roster.lua
 Core\Protocol.lua
 Core\Store.lua
+Core\Professions.lua
 Core\Sync.lua
 UI\Widgets.lua
 UI\Window.lua
 UI\Roster.lua
+UI\Crafting.lua
 Core\Startup.lua

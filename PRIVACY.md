@@ -8,6 +8,27 @@ World of Warcraft addons can't reach the internet. The Emberlight addon only tal
 members' Emberlight addons through the game's own addon channel, and keeps its data in the game's
 normal saved file (`WTF/Account/<account>/SavedVariables/Emberlight.lua`). That's all.
 
+Since addon 0.8.13 it also writes your characters' **professions** into that file: each profession
+with its level ("Mining 64 / 125"), and the recipes the character knows, read when you open a
+profession window ([`Professions.lua`](Emberlight/Core/Professions.lua)). Only reading: it never
+opens a window or changes a filter. To stop it, type `/emberlight professions off` in game; the
+website then drops your characters' professions at your next sync. `/emberlight professions on`
+starts it again, and `/emberlight professions` shows what it has recorded. It also notes each
+recipe's materials as the window lists them.
+
+So that members without the app still appear on the website, the addon also tells **guildmates
+who are online** your character's professions, levels and recipe numbers, over the same hidden
+guild channel guild events use. Their addon keeps it, and their Emberlight app uploads it; the
+website keeps your own app's report first whenever you use the app. Nothing else about you is
+shared this way, and with sharing off (the Crafting page's "Share my professions" button, or
+`/emberlight professions off`) your addon tells them your list is empty instead. Your addon in
+turn keeps what guildmates' addons share (for up to two weeks), and your app uploads it.
+
+The app also downloads **crafting requests** (what guild members asked for on the website that one
+of your characters can make, and your own requests) into `Emberlight_Data/Crafting.lua`, so the
+addon can show them under Crafting in its window. They hold character names, what was asked for,
+and the asker's note.
+
 ## The app: what it reads on your computer
 
 | What | Why | Sent anywhere? |
@@ -40,7 +61,7 @@ tracking, analytics or crash reporting.
 | When | What |
 |---|---|
 | You sign in | Your browser opens the website, which sends you to Discord. Discord is asked only for your name and id and your roles on the Emberlight server. The website throws Discord's access token away straight after. The app never sees your Discord or Battle.net password. |
-| A sync: when the app opens (unless it synced a few minutes ago), when you press Play or Sync now, and after you log out of WoW | Uploads the posts and replies **your own linked characters** wrote in the addon ([`flow.rs`](sync/src/flow.rs)). If you're an officer, also the posts you removed in game. Also up to 50 "verification sightings" from the last week: when another guild member types `/emberlight verify CODE` to prove a character is theirs, your addon notes that character's name and code, and the app passes it on so officers can confirm it. Then it downloads the guild's posts. |
+| A sync: when the app opens (unless it synced a few minutes ago), when you press Play or Sync now, and after you log out of WoW | Uploads the posts and replies **your own linked characters** wrote in the addon ([`flow.rs`](sync/src/flow.rs)). If you're an officer, also the posts you removed in game. Also up to 50 "verification sightings" from the last week: when another guild member types `/emberlight verify CODE` to prove a character is theirs, your addon notes that character's name and code, and the app passes it on so officers can confirm it. And your own linked characters' professions and known recipes, for the website's Professions page, which every guild member can see, plus the professions guildmates' addons shared with yours in game (only members' verified characters are accepted). Then it downloads the guild's posts. |
 | About every 3 minutes while you are signed in, and when the window returns if its information is older than 3 minutes | Asks for guild events, announcements and your linked characters. Overlapping refreshes are combined. |
 | When the app opens and every 4 hours | Asks whether there's a newer addon or app. No sign-in and nothing about you is sent. |
 | You sign out | Ends your session on the website. |

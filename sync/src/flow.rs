@@ -15,6 +15,8 @@ pub struct PushReport {
     pub removals: usize,
     /// Other members' character proofs this computer saw in game, reported to the server.
     pub proofs: usize,
+    /// This member's characters whose professions the website now has newer (addon 0.8.13).
+    pub professions: usize,
     pub stored: usize,
     pub unchanged: usize,
     pub expired: usize,
@@ -40,10 +42,13 @@ pub fn push(client: &Client, files: &[PathBuf], now: i64) -> Result<PushReport> 
     let me = client.me()?;
     let characters: Vec<String> = me.characters.into_iter().map(|c| c.name).collect();
     let mut report = PushReport::default();
-    let (mut notices, mut replies, mut removals, mut proofs) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let (mut notices, mut replies, mut removals, mut proofs, mut professions) = (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let mut relayed = Vec::new();
     for file in files {
         let parsed = std::fs::read(file).map_err(anyhow::Error::from).and_then(|b| Ok(lua::parse(&b)?)).and_then(|g| {
             proofs.extend(records::export_proofs(&g));
+            professions.extend(records::export_professions(&g));
+            relayed.extend(records::export_relayed_professions(&g));
             records::export_notices(&g, Some(now))
         });
         match parsed {
@@ -81,6 +86,32 @@ pub fn push(client: &Client, files: &[PathBuf], now: i64) -> Result<PushReport> 
         report.proofs = proofs.len();
         client.upload_proofs(&proofs)?;
     }
+    // Professions for the website's Professions page: only this member's own verified characters.
+    // The server keeps the newest scan of each and answers "unchanged" for the rest, so sending
+    // them at every sync is cheap. Optional: a failure (an older server) never stops the sync.
+    professions.retain(|p: &records::ProfessionScan| records::owns(&characters, &p.character) && now - p.scanned_at < 365 * 86400);
+    professions.sort_by_key(|p| std::cmp::Reverse(p.scanned_at));
+    let mut seen = std::collections::HashSet::new();
+    professions.retain(|p| seen.insert(p.character.clone()));
+    professions.truncate(40);
+    if !professions.is_empty()
+        && let Ok(results) = client.upload_professions(&professions)
+    {
+        report.professions = results.iter().filter(|r| r.status == "stored").count();
+    }
+    // Guildmates' professions their addons shared in game (members without the Companion). Not
+    // this member's own characters (sent above), newest share of each, from the last two weeks.
+    // The server stores each once and keeps a member's own report first. Optional, like the above.
+    relayed.retain(|p: &records::ProfessionScan| !records::owns(&characters, &p.character) && now - p.scanned_at < 14 * 86400);
+    relayed.sort_by_key(|p| std::cmp::Reverse(p.scanned_at));
+    let mut seen = std::collections::HashSet::new();
+    relayed.retain(|p| seen.insert(p.character.clone()));
+    relayed.truncate(40);
+    if !relayed.is_empty()
+        && let Ok(results) = client.upload_relayed_professions(&relayed)
+    {
+        report.professions += results.iter().filter(|r| r.status == "stored").count();
+    }
     Ok(report)
 }
 
@@ -94,6 +125,8 @@ pub fn push(client: &Client, files: &[PathBuf], now: i64) -> Result<PushReport> 
 pub fn pull(client: &Client, addons: &Path, still_closed: impl FnOnce() -> Result<()>) -> Result<WriteReport> {
     let download = client.download()?;
     let roster = client.roster_check();
+    // Crafting requests for the game (addon 0.8.13). Optional: a failure leaves the last file.
+    let crafting = client.craft_requests();
     still_closed()?;
     let mut report = datafile::write_data_addon(addons, &Archive { generated: download.generated, notices: download.notices, replies: download.replies, removed: download.removed })?;
     match roster {
@@ -102,6 +135,9 @@ pub fn pull(client: &Client, addons: &Path, still_closed: impl FnOnce() -> Resul
             report.roster = roster.map(|r| r.members.len());
         }
         Err(e) => report.roster_problem = Some(format!("{e:#}")),
+    }
+    if let Ok(crafting) = crafting {
+        datafile::write_crafting(addons, crafting.as_ref())?;
     }
     Ok(report)
 }

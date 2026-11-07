@@ -8,6 +8,7 @@ startup:SetScript("OnEvent", function(self, _, loaded)
     if db then
         EmberlightDB = db
         E.Sync.Start()
+        E.Professions.Start()
     end
     E.startupProblem = problem
     E.UI.CreateLauncher()
@@ -25,6 +26,17 @@ SlashCmdList.EMBERLIGHT = function(message)
     if code then
         local ok, problem = E.Sync.Verify(code)
         DEFAULT_CHAT_FRAME:AddMessage(ok and "Emberlight: proof sent. Guild members online will report it to the website at their next sync." or ("Emberlight: " .. problem))
+    elseif type(message) == "string" and message:lower():match("^%s*professions") then
+        local choice = message:lower():match("^%s*professions%s+(%a+)")
+        if choice == "on" or choice == "off" then
+            E.Professions.SetEnabled(choice == "on")
+            DEFAULT_CHAT_FRAME:AddMessage(choice == "on" and "Emberlight: your professions will be shared with the guild's website again." or "Emberlight: your professions are no longer shared. The website will drop them after your next Companion sync.")
+        end
+        for _, line in ipairs(E.Professions.Lines()) do DEFAULT_CHAT_FRAME:AddMessage("Emberlight: " .. line) end
+    elseif type(message) == "string" and message:lower():match("^%s*requests?%s*$") then
+        -- Opens the window on Crafting; the slash command is only a shortcut.
+        if E.UI.frame and E.UI.frame:IsShown() then E.UI.Go("Crafting")
+        else E.UI.Toggle(); if E.UI.frame and E.UI.frame:IsShown() then E.UI.Go("Crafting") end end
     elseif type(message) == "string" and message:match("^%s*[Ii][Nn][Ff][Oo]%s*$") then
         for _, line in ipairs(E.Client.Info()) do DEFAULT_CHAT_FRAME:AddMessage("Emberlight: " .. line) end
     else

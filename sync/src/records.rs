@@ -106,6 +106,141 @@ pub fn export_proofs(globals: &BTreeMap<String, Value>) -> Vec<Proof> {
     out
 }
 
+/// The professions this account's characters have, as the addon recorded them under
+/// `localData.professions` (Emberlight/Core/Professions.lua, addon 0.8.13): levels from the skill
+/// list, recipes from the profession windows. Uploaded for the member's own verified characters
+/// only; the server checks every name and number again.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfessionScan {
+    pub character: String,
+    /// When the addon last saw something change for this character.
+    pub scanned_at: i64,
+    /// False when a collapsed header hid part of the skill list: nothing is dropped then.
+    pub complete: bool,
+    pub skills: Vec<Skill>,
+    pub recipes: Vec<SkillRecipes>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Skill {
+    pub skill: String,
+    pub rank: i64,
+    pub max: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SkillRecipes {
+    pub skill: String,
+    pub list: Vec<Recipe>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Recipe {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub item_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spell_id: Option<i64>,
+    /// The materials the profession window listed (addon 0.8.13 and later); empty when unknown.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reagents: Vec<Reagent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Reagent {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub item_id: Option<i64>,
+    pub count: i64,
+}
+
+/// The professions the website lists (server/src/professions.ts).
+pub const SKILLS: [&str; 12] = ["Alchemy", "Blacksmithing", "Enchanting", "Engineering", "Herbalism", "Leatherworking", "Mining", "Skinning", "Tailoring", "Cooking", "First Aid", "Fishing"];
+const MAX_RECIPES: usize = 600;
+const MAX_REAGENTS: usize = 8;
+
+/// Every character's recorded professions in one SavedVariables file.
+pub fn export_professions(globals: &BTreeMap<String, Value>) -> Vec<ProfessionScan> {
+    read_professions(globals, "professions", false)
+}
+
+/// Professions guildmates' addons shared in game (`localData.relayedProfessions`, addon 0.8.13),
+/// for members without the Companion. A recipe may have no name yet (only its item or spell
+/// number): the server takes the name another member's game gave it.
+pub fn export_relayed_professions(globals: &BTreeMap<String, Value>) -> Vec<ProfessionScan> {
+    read_professions(globals, "relayedProfessions", true)
+}
+
+fn read_professions(globals: &BTreeMap<String, Value>, key: &str, relayed: bool) -> Vec<ProfessionScan> {
+    let mut out = Vec::new();
+    let all = globals
+        .get("EmberlightDB")
+        .and_then(Value::as_table)
+        .and_then(|db| field(db, "localData"))
+        .and_then(Value::as_table)
+        .and_then(|l| field(l, key))
+        .and_then(Value::as_table);
+    let text = |v: Option<&Value>| v.and_then(Value::as_bytes).and_then(|b| std::str::from_utf8(b).ok()).map(str::to_owned);
+    let id = |v: Option<&Value>| v.and_then(Value::as_int).filter(|n| (1..10_000_000).contains(n));
+    for (key, entry) in all.into_iter().flatten() {
+        let (Key::Str(character), Some(entry)) = (key, entry.as_table()) else { continue };
+        let Ok(character) = std::str::from_utf8(character) else { continue };
+        let Some(scanned_at) = field(entry, "at").and_then(Value::as_int).filter(|t| *t > 0) else { continue };
+        if !valid_owner(character) {
+            continue;
+        }
+        let mut scan = ProfessionScan { character: character.to_owned(), scanned_at, complete: field(entry, "complete").and_then(Value::as_bool) != Some(false), skills: Vec::new(), recipes: Vec::new() };
+        let skills = field(entry, "skills").and_then(Value::as_table);
+        let recipes = field(entry, "recipes").and_then(Value::as_table);
+        for skill in SKILLS {
+            let Some(s) = skills.and_then(|t| field(t, skill)).and_then(Value::as_table) else { continue };
+            let (Some(rank), Some(max)) = (field(s, "rank").and_then(Value::as_int), field(s, "max").and_then(Value::as_int)) else { continue };
+            if !(0..=1000).contains(&rank) || !(1..=1000).contains(&max) || rank > max {
+                continue;
+            }
+            scan.skills.push(Skill { skill: skill.to_owned(), rank, max });
+            let mut list: Vec<Recipe> = recipes
+                .and_then(|t| field(t, skill))
+                .and_then(Value::as_table)
+                .into_iter()
+                .flat_map(|t| t.values())
+                .filter_map(Value::as_table)
+                .filter_map(|r| {
+                    let ok = |name: &str| !name.is_empty() && name.len() <= 100 && !name.contains('|') && clean(name);
+                    let (item_id, spell_id) = (id(field(r, "item")), id(field(r, "spell")));
+                    let name = match text(field(r, "name")).map(|n| n.trim().to_owned()) {
+                        Some(name) if ok(&name) => name,
+                        // A shared recipe the receiving game had not named yet.
+                        None if relayed && (item_id.is_some() || spell_id.is_some()) => String::new(),
+                        _ => return None,
+                    };
+                    // Every material or none: a half list would mislead, and one bad entry makes
+                    // the server refuse the whole report.
+                    let reagents: Option<Vec<Reagent>> = field(r, "reagents")
+                        .and_then(Value::as_table)
+                        .map(|t| t.values().filter_map(Value::as_table).map(|g| {
+                            let name = text(field(g, "name"))?.trim().to_owned();
+                            let count = field(g, "count").and_then(Value::as_int).filter(|c| (1..=100).contains(c))?;
+                            ok(&name).then(|| Reagent { name, item_id: id(field(g, "item")), count })
+                        }).collect::<Option<Vec<_>>>().unwrap_or_default())
+                        .filter(|list| list.len() <= MAX_REAGENTS);
+                    Some(Recipe { name, item_id, spell_id, reagents: if relayed { Vec::new() } else { reagents.unwrap_or_default() } })
+                })
+                .collect();
+            list.sort_by(|a, b| (&a.name, a.item_id, a.spell_id).cmp(&(&b.name, b.item_id, b.spell_id)));
+            list.truncate(MAX_RECIPES);
+            if !list.is_empty() {
+                scan.recipes.push(SkillRecipes { skill: skill.to_owned(), list });
+            }
+        }
+        out.push(scan);
+    }
+    out
+}
+
 /// A notice the server says an officer removed (`removed` in the download).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Removed {
@@ -743,6 +878,46 @@ mod tests {
         assert!(bad(|r| r.line_revision = None).contains("revision"));
         assert!(bad(|r| r.line = Some("x".repeat(81))).contains("80 bytes"));
         assert!(bad(|r| r.line_revision = Some(0)).contains("line revision"));
+    }
+
+    #[test]
+    fn shared_professions_may_lack_names_but_not_numbers() {
+        let src = br#"EmberlightDB = { localData = { relayedProfessions = {
+            ["bob_example-testrealm"] = { at = 1800000000, complete = true, received = 1800000005,
+                skills = { Tailoring = { rank = 60, max = 75 } },
+                recipes = { Tailoring = { ["i:2569"] = { item = 2569 }, ["i:4343"] = { item = 4343, name = "Brown Linen Pants" }, ["n:x"] = { } } } },
+        } } }"#;
+        let globals = crate::lua::parse(src).unwrap();
+        assert!(export_professions(&globals).is_empty());
+        let scans = export_relayed_professions(&globals);
+        assert_eq!(scans.len(), 1);
+        assert_eq!(scans[0].recipes[0].list, vec![
+            Recipe { name: "".into(), item_id: Some(2569), spell_id: None, reagents: vec![] },
+            Recipe { name: "Brown Linen Pants".into(), item_id: Some(4343), spell_id: None, reagents: vec![] },
+        ]);
+    }
+
+    #[test]
+    fn professions_are_read_from_local_data() {
+        let src = br#"EmberlightDB = { schemaVersion = 3, localData = { professions = {
+            ["nora_everwood-testrealm"] = { at = 1800000000, complete = true,
+                skills = { Mining = { rank = 64, max = 125 }, Blacksmithing = { rank = 80, max = 150 }, Swords = { rank = 1, max = 300 }, Tailoring = { rank = 99, max = 75 } },
+                recipes = { Blacksmithing = { ["i:2661"] = { name = "Copper Chain Belt", item = 2661, reagents = { { name = "Copper Bar", item = 2840, count = 6 } } }, ["i:2852"] = { name = "Rough Copper Vest", item = 2852, reagents = { { name = "Copper Bar", count = 0 } } }, ["n:x"] = { name = "Bad|Hlink" } } } },
+            ["hidden_one-testrealm"] = { at = 1800000001, complete = true, hidden = true, skills = {}, recipes = {} },
+            ["Not Valid"] = { at = 1, skills = {} },
+        } } }"#;
+        let scans = export_professions(&crate::lua::parse(src).unwrap());
+        assert_eq!(scans.len(), 2);
+        let hidden = scans.iter().find(|s| s.character == "hidden_one-testrealm").unwrap();
+        assert!(hidden.complete && hidden.skills.is_empty());
+        let nora = scans.iter().find(|s| s.character == "nora_everwood-testrealm").unwrap();
+        assert_eq!(nora.skills, vec![Skill { skill: "Blacksmithing".into(), rank: 80, max: 150 }, Skill { skill: "Mining".into(), rank: 64, max: 125 }]);
+        assert_eq!(nora.recipes, vec![SkillRecipes { skill: "Blacksmithing".into(), list: vec![
+            Recipe { name: "Copper Chain Belt".into(), item_id: Some(2661), spell_id: None, reagents: vec![Reagent { name: "Copper Bar".into(), item_id: Some(2840), count: 6 }] },
+            Recipe { name: "Rough Copper Vest".into(), item_id: Some(2852), spell_id: None, reagents: vec![] },
+        ] }]);
+        let json = serde_json::to_value(&nora.recipes[0].list[0]).unwrap();
+        assert_eq!(json["reagents"][0], serde_json::json!({ "name": "Copper Bar", "itemId": 2840, "count": 6 }));
     }
 
     #[test]

@@ -3,7 +3,7 @@
 //! WoW loads addon files at login and `/reload` and never writes them back, so updating this
 //! folder cannot race the game's own SavedVariables save.
 
-use crate::api::RosterCheck;
+use crate::api::{CraftRequests, RosterCheck};
 use crate::lua::{self, Value, field};
 use crate::records::{self, Notice, Removed, Reply, Skipped};
 use anyhow::{Context, Result, bail};
@@ -20,6 +20,12 @@ const GLOBAL: &str = "EmberlightArchive";
 pub const ROSTER_FILE: &str = "Roster.lua";
 const ROSTER_GLOBAL: &str = "EmberlightRoster";
 pub const ROSTER_FORMAT: i64 = 1;
+/// Crafting requests this member can make or asked for (`Crafting.lua`, global `EmberlightCrafting`),
+/// from `GET /v1/professions/requests/game`. Addons before 0.8.13 never read it.
+pub const CRAFTING_FILE: &str = "Crafting.lua";
+const CRAFTING_GLOBAL: &str = "EmberlightCrafting";
+pub const CRAFTING_FORMAT: i64 = 1;
+const CRAFTING_REQUESTS: usize = 100;
 /// Limits that keep a damaged reply from writing a huge file; far above any real guild.
 const ROSTER_MEMBERS: usize = 2000;
 const ROSTER_CHARACTERS: usize = 50;
@@ -182,6 +188,39 @@ pub fn render_roster(roster: Option<&RosterCheck>) -> String {
     s
 }
 
+/// The crafting requests file. `None` (an older server, or not signed in) writes a file with no list.
+pub fn render_crafting(requests: Option<&CraftRequests>) -> String {
+    let mut s = String::from("-- Written by the Emberlight sync tool. Replaced on every sync; edits here are lost.\n");
+    let Some(list) = requests else {
+        s.push_str("-- No crafting requests were downloaded.\n");
+        return s;
+    };
+    s.push_str(&format!("{CRAFTING_GLOBAL} = {{\n\tformat = {CRAFTING_FORMAT},\n\tgenerated = {},\n\trequests = {{\n", list.generated));
+    let text = |v: &str, max: usize| roster_text(v, max);
+    for r in list.requests.iter().take(CRAFTING_REQUESTS) {
+        if !text(&r.recipe, 100) || !text(&r.for_character, 60) || !text(&r.skill, 20) || !(1..=20).contains(&r.quantity) || !["open", "claimed"].contains(&r.status.as_str()) {
+            continue;
+        }
+        let note: String = r.note.chars().filter(|c| !c.is_control() && *c != '|').take(300).collect();
+        let crafter = r.crafter.as_deref().filter(|c| text(c, 60)).map_or("nil".to_owned(), lua_string);
+        let can: Vec<String> = r.can_make_with.iter().filter(|c| text(c, 60)).take(10).map(|c| lua_string(c)).collect();
+        s.push_str(&format!(
+            "\t\t{{ id = {}, skill = {}, recipe = {}, quantity = {}, forCharacter = {}, note = {}, status = {}, crafter = {}, mine = {}, takenByMe = {}, canMakeWith = {{ {} }}, created = {} }},\n",
+            r.id, lua_string(&r.skill), lua_string(&r.recipe), r.quantity, lua_string(&r.for_character), lua_string(&note), lua_string(&r.status),
+            crafter, r.mine, r.taken_by_me, can.join(", "), r.created_at
+        ));
+    }
+    s.push_str("\t},\n}\n");
+    s
+}
+
+/// Write `<addons>/Emberlight_Data/Crafting.lua`. Callers must first confirm the game is not running.
+pub fn write_crafting(addons: &Path, requests: Option<&CraftRequests>) -> Result<()> {
+    let dir = addons.join(ADDON_DIR);
+    fs::create_dir_all(&dir).with_context(|| format!("cannot create {}", dir.display()))?;
+    write_atomic(&dir.join(CRAFTING_FILE), render_crafting(requests).as_bytes())
+}
+
 /// Write `<addons>/Emberlight_Data/Roster.lua`. Callers must first confirm the game is not running.
 pub fn write_roster(addons: &Path, roster: Option<&RosterCheck>) -> Result<()> {
     let dir = addons.join(ADDON_DIR);
@@ -272,7 +311,7 @@ pub fn read_interface(addons: &Path) -> Result<String> {
 
 pub fn render_toc(interface: &str) -> String {
     format!(
-        "## Interface: {interface}\n## Title: Emberlight Data\n## Notes: Guild records downloaded by the Emberlight sync tool.\n## Author: Emberlight\n## Version: {FORMAT}\nData.lua\nRoster.lua\n"
+        "## Interface: {interface}\n## Title: Emberlight Data\n## Notes: Guild records downloaded by the Emberlight sync tool.\n## Author: Emberlight\n## Version: {FORMAT}\nData.lua\nRoster.lua\nCrafting.lua\n"
     )
 }
 
@@ -359,6 +398,10 @@ pub fn write_data_addon(addons: &Path, archive: &Archive) -> Result<WriteReport>
     if !roster.exists() {
         write_atomic(&roster, render_roster(None).as_bytes())?;
     }
+    let crafting = dir.join(CRAFTING_FILE);
+    if !crafting.exists() {
+        write_atomic(&crafting, render_crafting(None).as_bytes())?;
+    }
     write_atomic(&dir.join(format!("{ADDON_DIR}.toc")), render_toc(&interface).as_bytes())?;
     Ok(WriteReport { dir, written: out.notices.len(), rejected, roster: None, roster_problem: None })
 }
@@ -382,6 +425,19 @@ mod tests {
         let archive = Archive { generated: 1, notices: vec![notice], replies: vec![with_line.clone(), without.clone()], removed: vec![] };
         let back = read_data(render_data(&archive).as_bytes()).unwrap();
         assert_eq!(back.replies, vec![with_line, without]);
+    }
+
+    #[test]
+    fn crafting_file_holds_only_valid_requests() {
+        use crate::api::{CraftRequest, CraftRequests};
+        let good = CraftRequest { id: 7, skill: "Blacksmithing".into(), recipe: "Copper Chain Belt".into(), quantity: 2, for_character: "Ann Example".into(), note: "I bring \"bars\"|x".into(), status: "open".into(), crafter: None, mine: false, taken_by_me: false, can_make_with: vec!["Sam Example".into()], created_at: 1_800_000_000 };
+        let bad = CraftRequest { quantity: 99, ..good.clone() };
+        let text = render_crafting(Some(&CraftRequests { generated: 1_800_000_100, requests: vec![good, bad] }));
+        let globals = lua::parse(text.as_bytes()).unwrap();
+        let list = globals.get("EmberlightCrafting").and_then(Value::as_table).and_then(|t| field(t, "requests")).and_then(Value::as_table).unwrap();
+        assert_eq!(list.len(), 1);
+        assert!(text.contains(r#"note = "I bring \"bars\"x""#));
+        assert!(!render_crafting(None).contains("EmberlightCrafting ="));
     }
 
     #[test]
@@ -417,7 +473,7 @@ mod tests {
         write_data_addon(dir.path(), &Archive::default()).unwrap();
         let data = dir.path().join(ADDON_DIR);
         assert!(fs::read_to_string(data.join(ROSTER_FILE)).unwrap().contains("Bob Example"), "writing the notices keeps the roster");
-        assert!(fs::read_to_string(data.join(format!("{ADDON_DIR}.toc"))).unwrap().ends_with("Data.lua\nRoster.lua\n"));
+        assert!(fs::read_to_string(data.join(format!("{ADDON_DIR}.toc"))).unwrap().ends_with("Data.lua\nRoster.lua\nCrafting.lua\n"));
         write_roster(dir.path(), None).unwrap();
         assert!(!fs::read_to_string(data.join(ROSTER_FILE)).unwrap().contains("Bob"));
     }

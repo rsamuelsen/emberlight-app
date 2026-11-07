@@ -604,6 +604,9 @@ function N.Apply(fields, sender)
         if not proofs[key] and count(proofs) >= 50 then return false end
         proofs[key] = { character = sender, code = code, at = now }
         return true
+    elseif kind == "F" or kind == "G" then
+        -- A guildmate's professions, for this member's Companion to pass on (Core/Professions.lua).
+        return E.Professions ~= nil and E.Professions.Receive(fields, sender) == true
     elseif kind == "M" and #fields == 4 then
         local entry = data.entries[fields[3]]; local rev = integer(fields[4], 1, 999999999999999)
         if not entry or not rev or entry.owner == sender or entry.cancelled or entry.expires <= C.Now() then return false end

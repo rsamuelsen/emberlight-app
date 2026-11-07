@@ -34,6 +34,10 @@ function S.Init(saved)
     -- Character proofs this client saw another member send (/emberlight verify), for the sync
     -- tool to report to the website (since 0.9.x).
     saved.localData.proofs = type(saved.localData.proofs) == "table" and saved.localData.proofs or {}
+    -- This account's characters' professions for the website (0.8.13, Core/Professions.lua), read
+    -- by the Companion. Shared unless the member typed /emberlight professions off.
+    saved.localData.professions = type(saved.localData.professions) == "table" and saved.localData.professions or {}
+    if type(st.shareProfessions) ~= "boolean" then st.shareProfessions = true end
     saved.guildData = type(saved.guildData) == "table" and saved.guildData or {}
     S.db = saved
     return saved

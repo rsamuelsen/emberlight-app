@@ -26,13 +26,15 @@ export interface Settings {
   discordId: string | null;
   autoUpdateAddon: boolean;
   keepInTray: boolean;
+  /** Moved off the finished Forever beta, which had the addon: install it in Forever once. */
+  installAddonAfterMove?: boolean;
 }
 
 export interface WowStatus {
   root: string | null;
   problem: string | null;
   flavors: string[];
-  /** The game folders that are WoW: Forever (the released game or its beta), whatever their name. */
+  /** The game folders that are WoW: Forever, whatever their name (never the finished beta). */
   forever?: string[];
   emberlight: string | null;
   version?: string | null;
@@ -50,6 +52,10 @@ export interface SyncReport {
   downloaded: number | null;
   note: string | null;
   error: string | null;
+  /** What the website took, by kind (Companion 0.4.6). */
+  sent?: { notices: number; replies: number; removals: number; professions: number };
+  /** Emberlight saved-data files found in the game folder; 0 means the addon never ran there. */
+  addonFiles?: number | null;
 }
 
 export interface AddonStatus {
@@ -205,7 +211,6 @@ export const CATEGORIES = ["", "Journey", "Call for aid", "Gathering", "Guild ev
 export const FLAVOR_NAMES: Record<string, string> = {
   _retail_: "Retail",
   _forever_: "WoW: Forever",
-  _classic_beta_: "Forever beta",
   _classic_: "Classic",
   _classic_era_: "Classic Era",
   _ptr_: "Test realm",
@@ -213,10 +218,11 @@ export const FLAVOR_NAMES: Record<string, string> = {
   _beta_: "Beta",
 };
 
-/** Only Forever clients belong in the Companion's game-version controls. */
+/** Only released Forever clients belong in the Companion's game-version controls. The Forever
+ *  beta closed at launch (4 November 2026) and is never offered. */
 export const foreverFlavors = (wow: WowStatus) => wow.flavors
-  .filter(f => f === "_forever_" || f === "_classic_beta_" || wow.forever?.includes(f))
+  .filter(f => f === "_forever_" || wow.forever?.includes(f))
   .sort((a, b) => Number(b === "_forever_") - Number(a === "_forever_"));
 
 export const flavorName = (f: string, forever: string[] = []) =>
-  forever.includes(f) && f !== "_classic_beta_" ? "WoW: Forever" : FLAVOR_NAMES[f] ?? f.replace(/^_|_$/g, "").replace(/_/g, " ");
+  f === "_forever_" || forever.includes(f) ? "WoW: Forever" : FLAVOR_NAMES[f] ?? f.replace(/^_|_$/g, "").replace(/_/g, " ");

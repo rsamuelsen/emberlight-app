@@ -30,6 +30,9 @@ pub struct Settings {
     pub keep_in_tray: bool,
     /// The one-time explanation shown when Close first leaves the app in the tray.
     pub tray_notice_seen: bool,
+    /// The app moved this member off the finished Forever beta (game::prefer_forever) where the
+    /// addon was installed: install it in WoW: Forever too, once, if updates are automatic.
+    pub install_addon_after_move: bool,
 }
 
 impl Default for Settings {
@@ -44,6 +47,7 @@ impl Default for Settings {
             auto_update_addon: true,
             keep_in_tray: true,
             tray_notice_seen: false,
+            install_addon_after_move: false,
         }
     }
 }
@@ -58,6 +62,22 @@ pub struct SyncReport {
     pub downloaded: Option<usize>,
     pub note: Option<String>,
     pub error: Option<String>,
+    /// What the website took, by kind, so the app can say what was sent (Companion 0.4.6).
+    #[serde(default)]
+    pub sent: SentCounts,
+    /// How many of Emberlight's saved-data files the game has written in this game folder: none
+    /// means the addon has never run there (wrong folder, or addon off). `None` in older reports.
+    #[serde(default)]
+    pub addon_files: Option<usize>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SentCounts {
+    pub notices: usize,
+    pub replies: usize,
+    pub removals: usize,
+    pub professions: usize,
 }
 
 /// The last addon update check: what happened, in words a member can read.

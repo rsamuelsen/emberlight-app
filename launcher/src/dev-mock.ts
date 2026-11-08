@@ -37,7 +37,7 @@ let failedLaunch = false;
 let state: Overview = {
   settings: { wowRoot: "C:\\Program Files (x86)\\World of Warcraft", flavor: "_forever_", server: "http://127.0.0.1:8787", memberName: "Wayfarer", discordId: "123456789012345678", autoUpdateAddon: true, keepInTray: true },
   signedIn: true,
-  wow: { root: "C:\\Program Files (x86)\\World of Warcraft", problem: null, flavors: ["_forever_", "_classic_beta_", "_retail_", "_classic_"], forever: ["_forever_", "_classic_beta_"], emberlight: "16001, 120105, 120100", version: "1.60.1.70755", accounts: ["WOW1"], gameRunning: false, running: [] },
+  wow: { root: "C:\\Program Files (x86)\\World of Warcraft", problem: null, flavors: ["_forever_", "_classic_beta_", "_retail_", "_classic_"], forever: ["_forever_"], emberlight: "16001, 120105, 120100", version: "1.60.1.70755", accounts: ["WOW1"], gameRunning: false, running: [] },
   addon: { installed: "0.8.10", previous: "0.8.9" },
   lastAddonCheck: { at: now() - 600, message: "Emberlight 0.8.10 is up to date.", error: false, kind: "current", latest: "0.8.10" },
   notices: sample,
@@ -208,7 +208,7 @@ export async function handle(cmd: string, args?: Record<string, unknown>): Promi
       return state;
     case "save_settings":
       state = { ...state, settings: { ...state.settings, wowRoot: (args?.wowRoot as string) ?? null, flavor: args?.flavor as string, server: args?.server as string } };
-      if (args?.wowRoot) state = { ...state, wow: { ...state.wow, root: args.wowRoot as string, problem: null, flavors: ["_forever_", "_classic_beta_", "_retail_", "_classic_"], forever: ["_forever_", "_classic_beta_"], accounts: ["WOW1"] } };
+      if (args?.wowRoot) state = { ...state, wow: { ...state.wow, root: args.wowRoot as string, problem: null, flavors: ["_forever_", "_classic_beta_", "_retail_", "_classic_"], forever: ["_forever_"], accounts: ["WOW1"] } };
       return state;
     case "sign_in":
       await wait(800);

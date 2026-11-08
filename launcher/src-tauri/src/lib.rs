@@ -123,9 +123,16 @@ async fn save_settings(app: AppHandle, wow_root: Option<String>, flavor: String,
                 s.settings.flavor_chosen = true;
             }
             s.settings.wow_root = wow_root;
+            let folder = (s.settings.wow_root.clone(), s.settings.flavor.clone());
             s.settings.flavor = flavor;
             s.settings.server = server;
-            game::prefer_forever(&mut s.settings);
+            if game::prefer_forever(&mut s.settings) {
+                s.settings.install_addon_after_move = true;
+            }
+            if folder != (s.settings.wow_root.clone(), s.settings.flavor.clone()) {
+                // Another game folder: the last addon check was about the old one.
+                s.last_addon_check = None;
+            }
         })?;
         Ok(overview_now(app))
     })
@@ -388,7 +395,13 @@ fn addon_change(app: &AppHandle, change: fn(&Settings) -> Result<game::AddonOutc
         Ok((kind, message, latest)) => AddonCheck { at: game::now(), message: message.clone(), error: false, kind: (*kind).into(), latest: latest.clone().or(previous_latest) },
         Err(e) => AddonCheck { at: game::now(), message: e.clone(), error: true, kind: "failed".into(), latest: previous_latest },
     };
-    state.update(|s| s.last_addon_check = Some(check))?;
+    let in_place = matches!(&result, Ok((kind, _, _)) if *kind == "installed" || *kind == "current");
+    state.update(|s| {
+        s.last_addon_check = Some(check);
+        if in_place {
+            s.settings.install_addon_after_move = false;
+        }
+    })?;
     result?;
     Ok(overview_now(app))
 }
@@ -610,7 +623,18 @@ pub fn run() {
         .setup(|app| {
             let path = app.path().app_config_dir()?.join("settings.json");
             let mut saved = store::load(&path);
-            game::prefer_forever(&mut saved.settings);
+            let before = saved.settings.clone();
+            if game::prefer_forever(&mut saved.settings) {
+                saved.settings.install_addon_after_move = true;
+            }
+            if saved.settings.flavor != before.flavor {
+                // The last addon check was about the old game folder.
+                saved.last_addon_check = None;
+            }
+            if saved.settings != before {
+                // Keep the move, so the settings file never points at the finished beta again.
+                let _ = store::save(&path, &saved);
+            }
             // Released builds always talk to the guild's own server; only a development build can be
             // pointed at another one (Settings, Advanced, shown in development only).
             if !cfg!(debug_assertions) {

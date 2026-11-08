@@ -194,7 +194,9 @@ export function App() {
     opened.current = true;
     const nowSecs = Date.now() / 1000;
     const idle = !overview.watching && !overview.wow.gameRunning && !overview.wow.problem;
-    const due = !!overview.addon.installed && !overview.wow.problem && !(overview.lastAddonCheck && nowSecs - overview.lastAddonCheck.at < 3600);
+    // After the move off the finished beta the addon may be missing in Forever: put it there too.
+    const wanted = !!overview.addon.installed || !!(overview.settings.installAddonAfterMove && overview.settings.autoUpdateAddon);
+    const due = wanted && !overview.wow.problem && !(overview.lastAddonCheck && nowSecs - overview.lastAddonCheck.at < 3600);
     const recent = overview.lastSync && nowSecs - overview.lastSync.at < 300;
     const sync = idle && overview.signedIn && !recent;
     (async () => {
@@ -225,7 +227,7 @@ export function App() {
     const timer = window.setInterval(() => {
       const o = latest.current;
       if (!o) return;
-      if (o.addon.installed && !o.wow.problem) addonUpdate(o, !o.watching && !o.wow.gameRunning);
+      if ((o.addon.installed || o.settings.installAddonAfterMove) && !o.wow.problem) addonUpdate(o, !o.watching && !o.wow.gameRunning);
       api.launcherUpdate().then(launcherResult, () => undefined);
     }, 4 * 60 * 60 * 1000);
     return () => window.clearInterval(timer);

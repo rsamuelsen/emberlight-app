@@ -4,7 +4,7 @@
 //! when Battle.net cannot (on macOS the client is still started directly first). Credentials stay
 //! with the game and Battle.net.
 
-use crate::store::{Settings, SyncReport};
+use crate::store::{SentCounts, Settings, SyncReport};
 use emberlight_sync::{api, datafile, flow, lua, paths, records, update, wow};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -38,34 +38,58 @@ pub fn root(settings: &Settings) -> Result<PathBuf, String> {
 
 /// WoW: Forever's game folder since launch (4 November 2026), seen on a real install.
 pub const FOREVER: &str = "_forever_";
-/// The WoW: Forever beta's game folder (WowB.exe), where the guild played in October 2026.
+/// The WoW: Forever beta's game folder (WowB.exe), where the guild played in October 2026. The beta
+/// closed at launch (4 November 2026): the app never uses it, nor any other test client.
 pub const FOREVER_BETA: &str = "_classic_beta_";
 
-/// The installed WoW: Forever folder to use: the released game (`_forever_`, or any other folder
-/// Battle.net says is Forever and not a test client), else the beta.
-pub fn forever_folder(root: &Path) -> Option<String> {
-    let found = paths::flavors(root);
-    let live = found.iter().find(|f| f.as_str() == FOREVER).or_else(|| {
-        found.iter().find(|f| {
-            let dir = root.join(f.as_str());
-            f.as_str() != FOREVER_BETA && paths::is_forever(&dir) && !paths::is_test_client(&dir)
-        })
-    });
-    live.or_else(|| found.iter().find(|f| f.as_str() == FOREVER_BETA)).cloned()
+/// Whether a game folder is the finished Forever beta or another test client (beta, test realm).
+pub fn is_retired(root: Option<&Path>, flavor: &str) -> bool {
+    flavor == FOREVER_BETA || flavor.contains("beta") || flavor.contains("ptr") || root.is_some_and(|r| paths::is_test_client(&r.join(flavor)))
 }
 
-/// The Companion follows WoW: Forever. Keep an explicitly chosen Forever client, but migrate
-/// old Retail/Classic choices and missing clients to the released game, else its beta.
-/// If Forever is not installed, target its missing folder rather than updating another game.
-pub fn prefer_forever(settings: &mut Settings) {
+/// The installed WoW: Forever folder to use: the released game (`_forever_`, or any other folder
+/// Battle.net says is Forever and not a test client). Never the finished beta.
+pub fn forever_folder(root: &Path) -> Option<String> {
+    let found = paths::flavors(root);
+    found.iter().find(|f| f.as_str() == FOREVER).or_else(|| {
+        found.iter().find(|f| {
+            let dir = root.join(f.as_str());
+            !is_retired(Some(root), f) && paths::is_forever(&dir)
+        })
+    }).cloned()
+}
+
+/// The Companion follows WoW: Forever. Keep an explicitly chosen Forever client, but move old
+/// Retail/Classic choices, the finished beta and missing clients to the released game. If Forever
+/// is not installed, target its missing folder (Settings then says so) rather than another game.
+///
+/// Returns true when it moved the member off the beta (or another test client) where the
+/// Emberlight addon was installed, so the app can install the addon in Forever as well. Members
+/// who tried the beta otherwise kept syncing an old beta folder after launch while the game used
+/// another one (8 November 2026).
+pub fn prefer_forever(settings: &mut Settings) -> bool {
     let root = root(settings).ok();
-    if settings.flavor_chosen
+    let retired = is_retired(root.as_deref(), &settings.flavor);
+    if !retired
+        && settings.flavor_chosen
         && let Some(dir) = root.as_ref().and_then(|r| paths::flavor_dir(r, &settings.flavor).ok())
-        && (settings.flavor == FOREVER_BETA || paths::is_forever(&dir))
+        && paths::is_forever(&dir)
     {
-        return;
+        return false;
     }
-    settings.flavor = root.as_deref().and_then(forever_folder).unwrap_or_else(|| FOREVER.into());
+    let had_addon = retired
+        && root
+            .as_ref()
+            .and_then(|r| paths::flavor_dir(r, &settings.flavor).ok())
+            .is_some_and(|dir| update::installed_version(&paths::addons_dir(&dir)).is_some());
+    let next = root.as_deref().and_then(forever_folder).unwrap_or_else(|| FOREVER.into());
+    let moved = next != settings.flavor;
+    settings.flavor = next;
+    if retired {
+        // The beta choice was the member's, but it no longer exists as a choice.
+        settings.flavor_chosen = false;
+    }
+    retired && moved && had_addon
 }
 
 pub fn status(settings: &Settings) -> WowStatus {
@@ -79,7 +103,7 @@ pub fn status(settings: &Settings) -> WowStatus {
         }
     };
     let flavors = paths::flavors(&root);
-    let forever = flavors.iter().filter(|f| f.as_str() == FOREVER_BETA || paths::is_forever(&root.join(f.as_str()))).cloned().collect();
+    let forever = flavors.iter().filter(|f| !is_retired(Some(&root), f) && paths::is_forever(&root.join(f.as_str()))).cloned().collect();
     let (emberlight, accounts, problem) = match paths::flavor_dir(&root, &settings.flavor) {
         Ok(dir) => (
             datafile::read_interface(&paths::addons_dir(&dir)).ok(),
@@ -139,10 +163,12 @@ fn sync_inner(settings: &Settings, token: &str, report: &mut SyncReport) -> Resu
     let dir = paths::flavor_dir(&root, &settings.flavor).map_err(|e| e.to_string())?;
 
     let files: Vec<_> = paths::saved_variables(&dir).into_iter().map(|a| a.path).collect();
+    report.addon_files = Some(files.len());
     let pushed = flow::push(&client, &files, now()).map_err(|e| e.to_string())?;
     report.uploaded = pushed.notices + pushed.replies + pushed.removals;
     // Professions the website took count as updates too (addon 0.8.13).
     report.stored = pushed.stored + pushed.professions;
+    report.sent = SentCounts { notices: pushed.stored_notices, replies: pushed.stored_replies, removals: pushed.stored_removals, professions: pushed.professions };
     report.rejected = pushed.problems;
     // Own events in a guild the website does not sync are never uploaded: say so, or the sync
     // looks fine while nothing arrives (the beta once renumbered the guild's region).
@@ -511,25 +537,36 @@ mod tests {
         let mut legacy = Settings { wow_root: Some(dir.display().to_string()), flavor: "_retail_".into(), flavor_chosen: true, ..Settings::default() };
         prefer_forever(&mut legacy);
         assert_eq!(legacy.flavor, "_forever_", "Retail alone is never the fallback");
-        std::fs::create_dir_all(dir.join("_classic_beta_")).unwrap();
+        // The finished beta is never picked, even when it is the only Forever folder left.
+        std::fs::create_dir_all(dir.join("_classic_beta_/Interface/AddOns/Emberlight")).unwrap();
+        std::fs::write(dir.join("_classic_beta_/Interface/AddOns/Emberlight/Emberlight.toc"), "## Version: 0.8.9\n").unwrap();
         let mut settings = Settings { wow_root: Some(dir.display().to_string()), ..Settings::default() };
         prefer_forever(&mut settings);
-        assert_eq!(settings.flavor, "_classic_beta_");
-        // The released game wins over the beta, also for a member the beta was picked for.
+        assert_eq!(settings.flavor, "_forever_");
         std::fs::create_dir_all(dir.join("_forever_")).unwrap();
         prefer_forever(&mut settings);
         assert_eq!(settings.flavor, "_forever_");
         let mut chosen = Settings { wow_root: Some(dir.display().to_string()), flavor: "_retail_".into(), flavor_chosen: true, ..Settings::default() };
         prefer_forever(&mut chosen);
         assert_eq!(chosen.flavor, "_forever_", "Migrate the old Retail test selection");
+        // A member who picked the beta during October moves to the released game, and the app
+        // knows to put the addon there too, since the beta had it.
         let mut beta = Settings { wow_root: Some(dir.display().to_string()), flavor: "_classic_beta_".into(), flavor_chosen: true, ..Settings::default() };
-        prefer_forever(&mut beta);
-        assert_eq!(beta.flavor, "_classic_beta_", "An explicit Forever beta choice is kept");
+        assert!(prefer_forever(&mut beta), "Moved off a beta that had the addon");
+        assert_eq!(beta.flavor, "_forever_");
+        assert!(!beta.flavor_chosen);
+        assert!(!prefer_forever(&mut beta), "Nothing moves the second time");
+        // A beta without the addon still moves, with nothing to install.
+        std::fs::remove_dir_all(dir.join("_classic_beta_/Interface")).unwrap();
+        let mut bare = Settings { wow_root: Some(dir.display().to_string()), flavor: "_classic_beta_".into(), flavor_chosen: true, ..Settings::default() };
+        assert!(!prefer_forever(&mut bare));
+        assert_eq!(bare.flavor, "_forever_");
         // A chosen beta that was uninstalled after launch moves to the released game.
         let mut gone = Settings { wow_root: Some(dir.display().to_string()), flavor: "_classic_beta_".into(), flavor_chosen: true, ..Settings::default() };
         std::fs::remove_dir_all(dir.join("_classic_beta_")).unwrap();
         prefer_forever(&mut gone);
         assert_eq!(gone.flavor, "_forever_");
+        assert!(is_retired(None, "_classic_beta_") && is_retired(None, "_classic_ptr_") && !is_retired(None, "_forever_"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

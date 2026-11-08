@@ -14,6 +14,6 @@ export function bugReport(o: Overview) {
   const root = o.wow.root ?? o.settings.wowRoot;
   const folder = !root ? "Not found" : /^(?:[a-z]:\\Program Files(?: \(x86\))?\\World of Warcraft|\/Applications\/World of Warcraft)\/?$/i.test(root.replace(/\\+$/g, "")) ? root : "Custom location (personal path left out)";
   const version = (v: string | null | undefined) => v && /^[\d., ]+$/.test(v) ? v : "Unknown";
-  const game = o.wow.forever?.includes(o.settings.flavor) && o.settings.flavor !== "_classic_beta_" ? "WoW: Forever" : FLAVOR_NAMES[o.settings.flavor] ?? "Unknown";
+  const game = o.settings.flavor === "_forever_" || o.wow.forever?.includes(o.settings.flavor) ? "WoW: Forever" : FLAVOR_NAMES[o.settings.flavor] ?? "Unknown";
   return ["Emberlight Companion bug report", `Companion: ${version(o.launcherVersion)}`, `Addon: ${version(o.addon.installed)}`, `Game: ${game}`, `Game build: ${version(o.wow.version)}`, `Game folder: ${folder}`, `Last sync: ${o.lastSync ? new Date(o.lastSync.at * 1000).toISOString() : "Never"}`, `Sync error: ${errorKind(o.lastSync?.error)}`, `Addon error: ${errorKind(o.lastAddonCheck?.error ? o.lastAddonCheck.message : null)}`].join("\n");
 }

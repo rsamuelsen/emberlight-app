@@ -18,6 +18,10 @@ pub struct PushReport {
     /// This member's characters whose professions the website now has newer (addon 0.8.13).
     pub professions: usize,
     pub stored: usize,
+    /// Of `stored`, how many were notices, replies and removals, so a member can be told what went.
+    pub stored_notices: usize,
+    pub stored_replies: usize,
+    pub stored_removals: usize,
     pub unchanged: usize,
     pub expired: usize,
     /// Guild boards with this member's own records that the server does not sync (not uploaded).
@@ -26,7 +30,9 @@ pub struct PushReport {
     pub problems: Vec<String>,
 }
 
-fn tally(report: &mut PushReport, results: &[UploadResult]) {
+/// Count the server's answers; returns how many it stored.
+fn tally(report: &mut PushReport, results: &[UploadResult]) -> usize {
+    let before = report.stored;
     for r in results {
         match r.status.as_str() {
             "stored" => report.stored += 1,
@@ -35,6 +41,7 @@ fn tally(report: &mut PushReport, results: &[UploadResult]) {
             _ => report.problems.push(r.reason.clone().unwrap_or_else(|| "refused by the server".into())),
         }
     }
+    report.stored - before
 }
 
 /// Upload the notices and replies written by this member's verified characters.
@@ -69,14 +76,14 @@ pub fn push(client: &Client, files: &[PathBuf], now: i64) -> Result<PushReport> 
     report.removals = removals.len();
     // Notices first: a reply is only accepted once the server knows its notice.
     if !notices.is_empty() {
-        tally(&mut report, &client.upload(&notices)?);
+        report.stored_notices = tally(&mut report, &client.upload(&notices)?);
     }
     if !replies.is_empty() {
-        tally(&mut report, &client.upload_replies(&replies)?);
+        report.stored_replies = tally(&mut report, &client.upload_replies(&replies)?);
     }
     // Only an officer's own removals; for anyone else the server refuses them, so none are sent.
     if !removals.is_empty() && me.officer {
-        tally(&mut report, &client.upload_removals(&removals)?);
+        report.stored_removals = tally(&mut report, &client.upload_removals(&removals)?);
     }
     // Proofs are only evidence for officers; one the server cannot match changes nothing and is
     // not a problem worth showing.

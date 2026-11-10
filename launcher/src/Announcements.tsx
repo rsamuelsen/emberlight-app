@@ -15,6 +15,8 @@ interface ListProps {
   onOpen: (id: string) => void;
   isUnread?: (a: Announcement) => boolean;
   onViewed?: (a: Announcement) => void;
+  /** Shows a "Mark as read" button under each unread announcement. */
+  onMarkRead?: (a: Announcement) => void;
 }
 
 /** Waiting, empty or failed states, shared by the list and the reader. */
@@ -27,7 +29,7 @@ function state(items: Announcement[] | null, signedIn: boolean, problem: string 
 }
 
 /** Announcements from the guild's Discord: date, title and a short preview. */
-export function NewsList({ items, signedIn, problem, limit, selected, onOpen, isUnread }: ListProps) {
+export function NewsList({ items, signedIn, problem, limit, selected, onOpen, isUnread, onMarkRead }: ListProps) {
   const quiet = state(items, signedIn, problem);
   if (quiet || !items) return <EmptyState title={quiet ?? "Fetching announcements…"} problem={signedIn && !!problem} />;
   return (
@@ -43,6 +45,7 @@ export function NewsList({ items, signedIn, problem, limit, selected, onOpen, is
               <Arrow />
               {preview && <span className="news-preview">{preview}</span>}
             </button>
+            {onMarkRead && isUnread?.(a) && <button type="button" className="news-mark" aria-label={`Mark "${title ? plainText(title) : "Announcement"}" as read`} onClick={() => onMarkRead(a)}>Mark as read</button>}
           </li>
         );
       })}
@@ -67,7 +70,7 @@ export function NewsReader({ items, signedIn, problem, selected, onOpen, isUnrea
   return (
     <div className="reader">
       <nav className="reader-list" aria-label="Announcements">
-        <NewsList items={items} signedIn={signedIn} problem={problem} selected={current.id} onOpen={onOpen} isUnread={isUnread} />
+        <NewsList items={items} signedIn={signedIn} problem={problem} selected={current.id} onOpen={onOpen} isUnread={isUnread} onMarkRead={onViewed} />
       </nav>
       <article tabIndex={0} aria-label="Selected announcement" className="reader-page" key={current.id}>
         <p className="reader-date">{serverWhen(current.createdAt, true)}</p>

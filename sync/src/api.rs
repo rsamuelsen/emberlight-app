@@ -96,7 +96,7 @@ pub struct RosterCharacter {
     pub main: bool,
 }
 
-/// A current member: their Discord rank (`guildMaster`, `keeper`, `veteran`, `kindled`,
+/// A current member: their Discord rank (`guildMaster`, `keeper`, `veteran`, `firstFlame`, `kindled`,
 /// `wayfarer`, or none), the in-game rank for their main and for their alts, and their verified
 /// characters, main first.
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]

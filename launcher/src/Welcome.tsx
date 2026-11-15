@@ -276,7 +276,7 @@ export function Welcome({ overview, onUpdate, characters, onDone }: Props) {
                     </div>
                   )}
                   <div className="guide-field">
-                    <button className={state.character ? "btn btn-small" : "btn"} onClick={linkOnWebsite}>
+                    <button className={state.character ? "btn btn-small" : "btn"} onClick={() => linkOnWebsite(characters?.found.length === 1 ? characters.found[0].name : undefined)}>
                       Link a character on the website
                     </button>
                   </div>

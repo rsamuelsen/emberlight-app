@@ -8,7 +8,13 @@ export const STATUS: Record<Claim["status"], string> = {
   refused: "Not approved",
 };
 
-export const linkOnWebsite = () => openInBrowser(`${WEBSITE}/portal/characters`);
+/**
+ * Opens My characters on the website. With a name (a character the Companion found in the game's
+ * files), the website fills it in and scrolls to the form, so it is one click to send (audit B2,
+ * 15 November 2026). A website that predates this just ignores the name.
+ */
+export const linkOnWebsite = (name?: string) =>
+  openInBrowser(`${WEBSITE}/portal/characters${typeof name === "string" && name ? `?name=${encodeURIComponent(name)}` : ""}`);
 
 /** The register stays read only; all linking and management happen on the website. */
 export function Characters({ characters, signedIn, problem, onRetry }: { characters: CharactersView | null; signedIn: boolean; problem: string | null; onRetry: () => void }) {
@@ -16,7 +22,7 @@ export function Characters({ characters, signedIn, problem, onRetry }: { charact
     <div className="characters-page">
       <div className="character-intro">
         <p>Link the characters you play on the guild website. An officer checks each request.</p>
-        {signedIn && <button className="btn btn-primary" onClick={linkOnWebsite}>Link a character <Arrow /></button>}
+        {signedIn && <button className="btn btn-primary" onClick={() => linkOnWebsite()}>Link a character <Arrow /></button>}
       </div>
       {signedIn && problem && <div className="settings-status is-problem" role="alert"><p>Could not refresh your characters. {problem}</p><button className="link" onClick={onRetry}>Try again</button></div>}
       {!signedIn ? <EmptyState title="Sign in to see your characters." detail="Use Sign in with Discord in the title bar or Settings." /> : !characters ? !problem && <EmptyState title="Reading the register…" /> : (
@@ -29,7 +35,7 @@ export function Characters({ characters, signedIn, problem, onRetry }: { charact
                   <span className="character-emblem"><Mark status={c.status} /></span>
                   <span className="roll-name">{c.name}</span>
                   <span className="roll-status">{STATUS[c.status]}</span>
-                  {c.status === "refused" && <div className="character-reason">{c.reason && <p>{c.reason}</p>}<button className="link" onClick={linkOnWebsite}>Fix this on the website <Arrow external /></button></div>}
+                  {c.status === "refused" && <div className="character-reason">{c.reason && <p>{c.reason}</p>}<button className="link" onClick={() => linkOnWebsite()}>Fix this on the website <Arrow external /></button></div>}
                 </li>
               ))}</ul>
             )}
@@ -38,7 +44,7 @@ export function Characters({ characters, signedIn, problem, onRetry }: { charact
           <section className="character-panel detected-panel">
             <header className="section-head"><h2>On this computer</h2></header>
             <p className="set-intro">Characters played here that are not linked yet.</p>
-            {characters.found.length ? <ul className="detected-list">{characters.found.map((f) => <li key={`${f.name}-${f.realm}`}><span>{f.name}</span>{characters.realms.length > 1 && <small>{f.realm}</small>}<button className="btn btn-small" onClick={linkOnWebsite} aria-label={`Link ${f.name}`}>Link <Arrow external /></button></li>)}</ul> : <EmptyState title="No unlinked characters found." />}
+            {characters.found.length ? <ul className="detected-list">{characters.found.map((f) => <li key={`${f.name}-${f.realm}`}><span>{f.name}</span>{characters.realms.length > 1 && <small>{f.realm}</small>}<button className="btn btn-small" onClick={() => linkOnWebsite(f.name)} aria-label={`Link ${f.name}`}>Link <Arrow external /></button></li>)}</ul> : <EmptyState title="No unlinked characters found." />}
             <p className="set-note">Manage your characters on the guild website. This list refreshes when you return.</p>
           </section>
         </div>

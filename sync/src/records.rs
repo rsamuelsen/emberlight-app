@@ -106,6 +106,102 @@ pub fn export_proofs(globals: &BTreeMap<String, Value>) -> Vec<Proof> {
     out
 }
 
+/// The guild bank log, as an officer's addon read it when they opened the guild bank
+/// (`localData.bankScans`, Emberlight/Core/GuildBank.lua, addon 0.8.14). Uploaded only for an
+/// officer; the server checks the rank, the character and every line again.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BankScan {
+    pub character: String,
+    pub scanned_at: i64,
+    /// The gold the bank held, in copper, when the game said.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bank_money: Option<i64>,
+    pub tabs: Vec<BankTab>,
+    pub money: Vec<BankLine>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BankTab {
+    pub tab: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    pub lines: Vec<BankLine>,
+}
+
+/// One line of a log: an item line has `item_id`/`item` and `count`, a gold line `copper`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BankLine {
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub item_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub item: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub count: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub copper: Option<i64>,
+    /// How long ago, in whole hours, as the game said; `rough` when it counted months or years.
+    pub hours: i64,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub rough: bool,
+}
+
+const BANK_LINES: usize = 100;
+
+/// The guild bank scans in one SavedVariables file, newest first. A line or tab that is not in the
+/// expected shape is left out; the server checks again.
+pub fn export_bank_scans(globals: &BTreeMap<String, Value>) -> Vec<BankScan> {
+    let mut out = Vec::new();
+    let scans = globals
+        .get("EmberlightDB")
+        .and_then(Value::as_table)
+        .and_then(|db| field(db, "localData"))
+        .and_then(Value::as_table)
+        .and_then(|l| field(l, "bankScans"))
+        .and_then(Value::as_table);
+    let text = |v: Option<&Value>, max: usize| {
+        v.and_then(Value::as_bytes)
+            .and_then(|b| std::str::from_utf8(b).ok())
+            .map(str::trim)
+            .filter(|t| !t.is_empty() && t.len() <= max * 4 && t.chars().count() <= max && clean(t))
+            .map(str::to_owned)
+    };
+    let int = |v: Option<&Value>, min: i64, max: i64| v.and_then(Value::as_int).filter(|n| (min..=max).contains(n));
+    let line = |t: &Table, gold: bool| -> Option<BankLine> {
+        let kind = text(field(t, "type"), 20).filter(|k| k.bytes().all(|b| b.is_ascii_alphabetic()))?;
+        let name = text(field(t, "name"), 60)?;
+        let hours = int(field(t, "hours"), 0, 200_000)?;
+        let rough = field(t, "rough").and_then(Value::as_bool) == Some(true);
+        if gold {
+            let copper = int(field(t, "copper"), 1, 100_000_000_000)?;
+            Some(BankLine { kind, name, item_id: None, item: None, count: None, copper: Some(copper), hours, rough })
+        } else {
+            let count = int(field(t, "count"), 1, 100_000)?;
+            let item_id = int(field(t, "itemId"), 1, 10_000_000);
+            let item = text(field(t, "item"), 100);
+            Some(BankLine { kind, name, item_id, item, count: Some(count), copper: None, hours, rough })
+        }
+    };
+    for scan in scans.into_iter().flat_map(|t| t.values()).filter_map(Value::as_table) {
+        let (Some(character), Some(scanned_at)) = (text(field(scan, "character"), 120), int(field(scan, "at"), 1, i64::MAX)) else { continue };
+        let mut tabs = Vec::new();
+        for tab in field(scan, "tabs").and_then(Value::as_table).into_iter().flat_map(|t| t.values()).filter_map(Value::as_table) {
+            let Some(number) = int(field(tab, "tab"), 1, 12) else { continue };
+            let lines: Vec<BankLine> = field(tab, "lines").and_then(Value::as_table).into_iter().flat_map(|t| t.values()).filter_map(Value::as_table).filter_map(|l| line(l, false)).take(BANK_LINES).collect();
+            tabs.push(BankTab { tab: number, name: text(field(tab, "name"), 40), lines });
+        }
+        tabs.truncate(12);
+        let money = field(scan, "money").and_then(Value::as_table).into_iter().flat_map(|t| t.values()).filter_map(Value::as_table).filter_map(|l| line(l, true)).take(BANK_LINES).collect();
+        out.push(BankScan { character, scanned_at, bank_money: int(field(scan, "bankMoney"), 0, i64::MAX / 2), tabs, money });
+    }
+    out.sort_by(|a, b| b.scanned_at.cmp(&a.scanned_at));
+    out
+}
+
 /// The professions this account's characters have, as the addon recorded them under
 /// `localData.professions` (Emberlight/Core/Professions.lua, addon 0.8.13): levels from the skill
 /// list, recipes from the profession windows. Uploaded for the member's own verified characters
@@ -895,6 +991,30 @@ mod tests {
             Recipe { name: "".into(), item_id: Some(2569), spell_id: None, reagents: vec![] },
             Recipe { name: "Brown Linen Pants".into(), item_id: Some(4343), spell_id: None, reagents: vec![] },
         ]);
+    }
+
+    #[test]
+    fn guild_bank_scans_are_read_and_sent_in_the_server_shape() {
+        let src = br#"EmberlightDB = { schemaVersion = 3, localData = { bankScans = {
+            { at = 1800000600, character = "Keeper Example-TestRealm", bankMoney = 1234567,
+              tabs = { { tab = 1, name = "Cloth", lines = { { type = "deposit", name = "Alice Example", itemId = 2589, item = "Linen Cloth", count = 20, hours = 3 },
+                                                             { type = "withdraw", name = "Bad|Name", itemId = 1, count = 1, hours = 1 } } } },
+              money = { { type = "deposit", name = "Alice Example", copper = 50000, hours = 1 }, { type = "repair", name = "Bob Example", copper = 1234, hours = 1460, rough = true }, { type = "deposit", name = "Zero", copper = 0, hours = 1 } } },
+            { at = 1800000000, character = "Keeper Example-TestRealm", tabs = {}, money = {} },
+            { character = "No Time-TestRealm" },
+        } } }"#;
+        let scans = export_bank_scans(&crate::lua::parse(src).unwrap());
+        assert_eq!(scans.len(), 2);
+        assert_eq!(scans[0].scanned_at, 1800000600);
+        assert_eq!(scans[0].bank_money, Some(1234567));
+        assert_eq!(scans[0].tabs[0].lines.len(), 1, "a name with markup is left out");
+        assert_eq!(scans[0].money.len(), 2, "a line without gold is left out");
+        assert_eq!(scans[1].bank_money, None);
+        let json = serde_json::to_value(&scans[0]).unwrap();
+        assert_eq!(json["scannedAt"], 1800000600);
+        assert_eq!(json["bankMoney"], 1234567);
+        assert_eq!(json["tabs"][0]["lines"][0], serde_json::json!({ "type": "deposit", "name": "Alice Example", "itemId": 2589, "item": "Linen Cloth", "count": 20, "hours": 3 }));
+        assert_eq!(json["money"][1], serde_json::json!({ "type": "repair", "name": "Bob Example", "copper": 1234, "hours": 1460, "rough": true }));
     }
 
     #[test]

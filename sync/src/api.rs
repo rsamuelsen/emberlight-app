@@ -1,6 +1,6 @@
 //! Client for the Emberlight server (server/ in this repository).
 
-use crate::records::{Notice, ProfessionScan, Proof, Removal, Removed, Reply};
+use crate::records::{BankScan, Notice, ProfessionScan, Proof, Removal, Removed, Reply};
 use anyhow::{Context, Result, bail};
 use reqwest::blocking::{Client as Http, RequestBuilder};
 use reqwest::{StatusCode, Url};
@@ -347,6 +347,25 @@ impl Client {
         let mut out = Vec::new();
         for chunk in scans.chunks(5) {
             let reply: Reply2 = self.send(self.http.post(self.url(path)).json(&Body { characters: chunk }))?;
+            out.extend(reply.results);
+        }
+        Ok(out)
+    }
+
+    /// An officer's guild bank log scans (`POST /v1/admin/contributions/bank/uploads`, addon
+    /// 0.8.14). The server stores each scan once and only lines it has not seen.
+    pub fn upload_bank_scans(&self, scans: &[BankScan]) -> Result<Vec<UploadResult>> {
+        #[derive(Serialize)]
+        struct Body<'a> {
+            scans: &'a [BankScan],
+        }
+        #[derive(Deserialize)]
+        struct Reply2 {
+            results: Vec<UploadResult>,
+        }
+        let mut out = Vec::new();
+        for chunk in scans.chunks(5) {
+            let reply: Reply2 = self.send(self.http.post(self.url("/v1/admin/contributions/bank/uploads")).json(&Body { scans: chunk }))?;
             out.extend(reply.results);
         }
         Ok(out)

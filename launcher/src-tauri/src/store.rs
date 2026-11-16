@@ -78,6 +78,8 @@ pub struct SentCounts {
     pub replies: usize,
     pub removals: usize,
     pub professions: usize,
+    /// Guild bank log scans (officers, addon 0.8.14).
+    pub bank_scans: usize,
 }
 
 /// The last addon update check: what happened, in words a member can read.

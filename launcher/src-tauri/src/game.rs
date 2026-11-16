@@ -167,8 +167,8 @@ fn sync_inner(settings: &Settings, token: &str, report: &mut SyncReport) -> Resu
     let pushed = flow::push(&client, &files, now()).map_err(|e| e.to_string())?;
     report.uploaded = pushed.notices + pushed.replies + pushed.removals;
     // Professions the website took count as updates too (addon 0.8.13).
-    report.stored = pushed.stored + pushed.professions;
-    report.sent = SentCounts { notices: pushed.stored_notices, replies: pushed.stored_replies, removals: pushed.stored_removals, professions: pushed.professions };
+    report.stored = pushed.stored + pushed.professions + pushed.bank_scans;
+    report.sent = SentCounts { notices: pushed.stored_notices, replies: pushed.stored_replies, removals: pushed.stored_removals, professions: pushed.professions, bank_scans: pushed.bank_scans };
     report.rejected = pushed.problems;
     // Own events in a guild the website does not sync are never uploaded: say so, or the sync
     // looks fine while nothing arrives (the beta once renumbered the guild's region).

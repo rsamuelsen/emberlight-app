@@ -53,7 +53,7 @@ export interface SyncReport {
   note: string | null;
   error: string | null;
   /** What the website took, by kind (Companion 0.4.6). */
-  sent?: { notices: number; replies: number; removals: number; professions: number };
+  sent?: { notices: number; replies: number; removals: number; professions: number; bankScans?: number };
   /** Emberlight saved-data files found in the game folder; 0 means the addon never ran there. */
   addonFiles?: number | null;
 }

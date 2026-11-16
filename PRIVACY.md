@@ -29,6 +29,14 @@ of your characters can make, and your own requests) into `Emberlight_Data/Crafti
 addon can show them under Crafting in its window. They hold character names, what was asked for,
 and the asker's note.
 
+Since addon 0.8.14, when an **officer** (the guild master, a Flame Keeper or an Officer Alt) opens
+the guild bank, their addon reads the **guild bank's log**, the same lines the game's own Log tabs
+show (who put in or took out which gold or items, about how long ago) and how much gold the bank
+holds, into that file ([`GuildBank.lua`](Emberlight/Core/GuildBank.lua)). Only reading: it never
+moves, deposits or withdraws anything and sends nothing to other players. Their app uploads it, and
+on the website every line waits until an officer approves it; approved gold deposits show the
+giver's name and total in the vault's Hall of givers. `/emberlight bank off` stops it.
+
 ## The app: what it reads on your computer
 
 | What | Why | Sent anywhere? |
@@ -61,7 +69,7 @@ tracking, analytics or crash reporting.
 | When | What |
 |---|---|
 | You sign in | Your browser opens the website, which sends you to Discord. Discord is asked only for your name and id and your roles on the Emberlight server. The website throws Discord's access token away straight after. The app never sees your Discord or Battle.net password. |
-| A sync: when the app opens (unless it synced a few minutes ago), when you press Play or Sync now, and after you log out of WoW | Uploads the posts and replies **your own linked characters** wrote in the addon ([`flow.rs`](sync/src/flow.rs)). If you're an officer, also the posts you removed in game. Also up to 50 "verification sightings" from the last week: when another guild member types `/emberlight verify CODE` to prove a character is theirs, your addon notes that character's name and code, and the app passes it on so officers can confirm it. And your own linked characters' professions and known recipes, for the website's Professions page, which every guild member can see, plus the professions guildmates' addons shared with yours in game (only members' verified characters are accepted). Then it downloads the guild's posts. |
+| A sync: when the app opens (unless it synced a few minutes ago), when you press Play or Sync now, and after you log out of WoW | Uploads the posts and replies **your own linked characters** wrote in the addon ([`flow.rs`](sync/src/flow.rs)). If you're an officer, also the posts you removed in game. Also up to 50 "verification sightings" from the last week: when another guild member types `/emberlight verify CODE` to prove a character is theirs, your addon notes that character's name and code, and the app passes it on so officers can confirm it. And your own linked characters' professions and known recipes, for the website's Professions page, which every guild member can see, plus the professions guildmates' addons shared with yours in game (only members' verified characters are accepted). If you're an officer, also the guild bank log your addon read in the last 30 days. Then it downloads the guild's posts. |
 | About every 3 minutes while you are signed in, and when the window returns if its information is older than 3 minutes | Asks for guild events, announcements and your linked characters. Overlapping refreshes are combined. |
 | When the app opens and every 4 hours | Asks whether there's a newer addon or app. No sign-in and nothing about you is sent. |
 | You sign out | Ends your session on the website. |

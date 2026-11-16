@@ -38,6 +38,10 @@ function S.Init(saved)
     -- by the Companion. Shared unless the member typed /emberlight professions off.
     saved.localData.professions = type(saved.localData.professions) == "table" and saved.localData.professions or {}
     if type(st.shareProfessions) ~= "boolean" then st.shareProfessions = true end
+    -- The guild bank log for the website, read when an officer opens the guild bank (0.8.14,
+    -- Core/GuildBank.lua), read by the Companion. On unless the officer typed /emberlight bank off.
+    saved.localData.bankScans = type(saved.localData.bankScans) == "table" and saved.localData.bankScans or {}
+    if type(st.readBankLog) ~= "boolean" then st.readBankLog = true end
     saved.guildData = type(saved.guildData) == "table" and saved.guildData or {}
     S.db = saved
     return saved

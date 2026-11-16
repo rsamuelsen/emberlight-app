@@ -9,6 +9,7 @@ startup:SetScript("OnEvent", function(self, _, loaded)
         EmberlightDB = db
         E.Sync.Start()
         E.Professions.Start()
+        E.GuildBank.Start()
     end
     E.startupProblem = problem
     E.UI.CreateLauncher()
@@ -33,6 +34,10 @@ SlashCmdList.EMBERLIGHT = function(message)
             DEFAULT_CHAT_FRAME:AddMessage(choice == "on" and "Emberlight: your professions will be shared with the guild's website again." or "Emberlight: your professions are no longer shared. The website will drop them after your next Companion sync.")
         end
         for _, line in ipairs(E.Professions.Lines()) do DEFAULT_CHAT_FRAME:AddMessage("Emberlight: " .. line) end
+    elseif type(message) == "string" and message:lower():match("^%s*bank") then
+        local choice = message:lower():match("^%s*bank%s+(%a+)")
+        if choice == "on" or choice == "off" then E.GuildBank.SetEnabled(choice == "on") end
+        for _, line in ipairs(E.GuildBank.Lines()) do DEFAULT_CHAT_FRAME:AddMessage("Emberlight: " .. line) end
     elseif type(message) == "string" and message:lower():match("^%s*requests?%s*$") then
         -- Opens the window on Crafting; the slash command is only a shortcut.
         if E.UI.frame and E.UI.frame:IsShown() then E.UI.Go("Crafting")

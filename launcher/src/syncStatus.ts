@@ -10,6 +10,7 @@ export function sentList(report: SyncReport) {
     s.replies && count(s.replies, "reply", "replies"),
     s.removals && count(s.removals, "removal", "removals"),
     s.professions && count(s.professions, "profession update", "profession updates"),
+    s.bankScans && count(s.bankScans, "guild bank log", "guild bank logs"),
   ].filter(Boolean) as string[];
   // A report saved by an older Companion has only the total.
   if (!parts.length && report.stored > 0) parts.push(count(report.stored, "update", "updates"));

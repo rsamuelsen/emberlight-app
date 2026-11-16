@@ -92,13 +92,21 @@ local function byName(a, b) return a.name:lower() < b.name:lower() end
 --   invite:       each member with verified characters not in the guild: { member, rows = { character }, inGuild }.
 function R.Check(website, guild)
     local result = { notOnWebsite = {}, wrongRank = {}, members = {}, invite = {}, inGuild = #guild, missing = 0 }
-    local known, here = {}, {}
+    -- A name on the website may differ from the game's by an accent ("Thorgrim" for "Thörgrim",
+    -- 16 November 2026): the same name, accents aside, is a match when exactly one website
+    -- character has it. Two that differ only by an accent are left as not on the website, for an
+    -- officer to sort out. The game's spelling is what is shown.
+    local known, folded, here = {}, {}, {}
     for _, m in ipairs(website.members) do
-        for _, ch in ipairs(m.characters) do known[ch.key] = true end
+        for _, ch in ipairs(m.characters) do
+            known[ch.key] = true
+            local f = E.Fold(ch.key)
+            folded[f] = folded[f] == nil and ch.key or false
+        end
     end
     for _, entry in ipairs(guild) do
-        here[entry.key] = entry
-        if not known[entry.key] then result.notOnWebsite[#result.notOnWebsite + 1] = entry end
+        local key = known[entry.key] and entry.key or folded[E.Fold(entry.key)] or nil
+        if key then here[key] = entry else result.notOnWebsite[#result.notOnWebsite + 1] = entry end
     end
     table.sort(result.notOnWebsite, byName)
     for _, m in ipairs(website.members) do

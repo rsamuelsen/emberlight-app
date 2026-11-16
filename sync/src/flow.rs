@@ -17,6 +17,8 @@ pub struct PushReport {
     pub proofs: usize,
     /// This member's characters whose professions the website now has newer (addon 0.8.13).
     pub professions: usize,
+    /// Guild bank log scans the website took (officers only, addon 0.8.14).
+    pub bank_scans: usize,
     pub stored: usize,
     /// Of `stored`, how many were notices, replies and removals, so a member can be told what went.
     pub stored_notices: usize,
@@ -51,11 +53,13 @@ pub fn push(client: &Client, files: &[PathBuf], now: i64) -> Result<PushReport> 
     let mut report = PushReport::default();
     let (mut notices, mut replies, mut removals, mut proofs, mut professions) = (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
     let mut relayed = Vec::new();
+    let mut bank = Vec::new();
     for file in files {
         let parsed = std::fs::read(file).map_err(anyhow::Error::from).and_then(|b| Ok(lua::parse(&b)?)).and_then(|g| {
             proofs.extend(records::export_proofs(&g));
             professions.extend(records::export_professions(&g));
             relayed.extend(records::export_relayed_professions(&g));
+            bank.extend(records::export_bank_scans(&g));
             records::export_notices(&g, Some(now))
         });
         match parsed {
@@ -118,6 +122,24 @@ pub fn push(client: &Client, files: &[PathBuf], now: i64) -> Result<PushReport> 
         && let Ok(results) = client.upload_relayed_professions(&relayed)
     {
         report.professions += results.iter().filter(|r| r.status == "stored").count();
+    }
+    // The guild bank log: an officer's scans from the last 30 days, oldest first so the server
+    // compares each with the ones before. The server checks the rank and the character, and keeps
+    // each scan once ("unchanged" after). Optional: a failure never stops the sync, but a refusal
+    // is said so the officer knows.
+    bank.retain(|s: &records::BankScan| now - s.scanned_at < 30 * 86400);
+    bank.sort_by_key(|s| s.scanned_at);
+    bank.dedup_by(|a, b| a.character == b.character && a.scanned_at == b.scanned_at);
+    if me.officer && !bank.is_empty() {
+        match client.upload_bank_scans(&bank) {
+            Ok(results) => {
+                report.bank_scans = results.iter().filter(|r| r.status == "stored").count();
+                for r in results.iter().filter(|r| r.status == "rejected") {
+                    report.problems.push(format!("Guild bank log: {}", r.reason.clone().unwrap_or_else(|| "refused by the server".into())));
+                }
+            }
+            Err(e) => report.problems.push(format!("The guild bank log was not sent: {e:#}")),
+        }
     }
     Ok(report)
 }

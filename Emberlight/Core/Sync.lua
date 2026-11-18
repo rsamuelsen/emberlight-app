@@ -229,7 +229,7 @@ function N.Queue(fields, key)
     local wire = E.Protocol.Encode(fields)
     if not wire then return nil, "This notice is too large to share." end
     N.packetID = (N.packetID or 0) + 1
-    local official = (fields[1] == "N" and tonumber(fields[7]) == 4) or fields[1] == "S"
+    local official = (fields[1] == "N" and tonumber(fields[7]) == 4) or fields[1] == "S" or fields[1] == "B"
     N.queue[#N.queue+1] = { key=key, wire=wire, id=tostring(N.packetID), part=1, since=C.Now(), guild=N.guild, official=official }
     return true
 end
@@ -502,6 +502,8 @@ function N.Snapshot()
     if N.lastSnapshot and C.Now() - N.lastSnapshot < 30 then return end
     local data, roster, me = N.Context(); if not data or not N.Ready() then return end
     N.lastSnapshot = C.Now()
+    -- This addon's version, for guildmates' update notice and the officers' list (Core/Presence.lua).
+    if E.Presence then N.Queue({"A", N.guild, E.version}, "A") end
     for _, entry in ipairs(N.List()) do
         -- No relaying somebody else's record: only the authenticated author resends it.
         if entry.owner == me then N.Queue(N.Fields(entry), "N:" .. entry.id .. ":" .. entry.revision) end
@@ -607,6 +609,13 @@ function N.Apply(fields, sender)
     elseif kind == "F" or kind == "G" then
         -- A guildmate's professions, for this member's Companion to pass on (Core/Professions.lua).
         return E.Professions ~= nil and E.Professions.Receive(fields, sender) == true
+    elseif kind == "A" and #fields == 3 then
+        -- A guildmate's addon version (0.9.0). Older addons ignore this kind.
+        return E.Presence ~= nil and E.Presence.Heard(sender, fields[3], roster[sender].officer == true) == true
+    elseif kind == "B" and #fields == 4 then
+        -- An officer's grand message (0.9.0): the sender's rank in game decides, never the message.
+        if not roster[sender].officer or not integer(fields[3], 1, 99999999999) or not safe(fields[4], 200, true) then return false end
+        return E.Presence ~= nil and E.Presence.Grand(sender, fields[3], fields[4], roster[sender].name) == true
     elseif kind == "M" and #fields == 4 then
         local entry = data.entries[fields[3]]; local rev = integer(fields[4], 1, 999999999999999)
         if not entry or not rev or entry.owner == sender or entry.cancelled or entry.expires <= C.Now() then return false end

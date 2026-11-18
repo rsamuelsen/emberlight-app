@@ -37,6 +37,18 @@ moves, deposits or withdraws anything and sends nothing to other players. Their 
 on the website every line waits until an officer approves it; approved gold deposits show the
 giver's name and total in the vault's Hall of givers. `/emberlight bank off` stops it.
 
+Since addon 0.9.0 the addon tells guildmates online **which version of the addon** you use, so
+an addon that is out of date can say so when you log in, and officers can see who uses it. The app
+also writes the guild's newest addon version into the game's data folder when it checks for updates. Officers
+can also send a short **grand message** that shows on the screen of guildmates online.
+
+The **guild map** (0.9.0) is **on unless you switch it off** in the addon's Settings (or with
+`/emberlight map off`); the first time, the addon says so in chat. While it is on, your addon tells guildmates online where your character is
+on the map, about every 10 seconds while you move, never inside a dungeon, raid or battleground,
+and you see the guildmates who also switched it on. Nothing about where you were is saved, by the
+addon or anyone else's, and the app never sends it to the website. Switch it off and your flame
+disappears from their maps.
+
 ## The app: what it reads on your computer
 
 | What | Why | Sent anywhere? |
@@ -92,8 +104,12 @@ in its normal logs.
 
 **Activity.** The guild's officers can see when each member last visited the website, and, from the
 guild's Discord bot, when they last wrote a message anywhere in the Discord server (never the
-text) and were last online there. Using the app, the sync tool or the addon never counts as
-activity, and nothing from the game is used.
+text), on how many of the last 30 days they wrote one, and when they were last online there.
+Since addon 0.8.15 they can also see when each member's characters were last in game: the addon
+notes, to the hour, what the game's own guild window already shows every guild member (who is
+online, and how long others have been offline), and the app sends it to the website. Only
+character names and times; notes, zones and levels are never read. Using the app or the sync tool
+itself never counts as activity.
 
 ## Things you can switch off
 

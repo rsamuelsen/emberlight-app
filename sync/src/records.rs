@@ -198,8 +198,50 @@ pub fn export_bank_scans(globals: &BTreeMap<String, Value>) -> Vec<BankScan> {
         let money = field(scan, "money").and_then(Value::as_table).into_iter().flat_map(|t| t.values()).filter_map(Value::as_table).filter_map(|l| line(l, true)).take(BANK_LINES).collect();
         out.push(BankScan { character, scanned_at, bank_money: int(field(scan, "bankMoney"), 0, i64::MAX / 2), tabs, money });
     }
-    out.sort_by(|a, b| b.scanned_at.cmp(&a.scanned_at));
+    out.sort_by_key(|s| std::cmp::Reverse(s.scanned_at));
     out
+}
+
+/// When a guildmate's character was last in game, as this member's addon read it from the guild
+/// window (`localData.guildSeen.characters`, Emberlight/Core/GuildSeen.lua, addon 0.8.15): the
+/// character's identity and a time to the hour. For the officers' activity overview; the server
+/// matches each name to a member's verified character and keeps only later times.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GameSeen {
+    pub character: String,
+    pub seen_at: i64,
+}
+
+/// The most characters sent in one sync (a guild far larger than this one still fits).
+pub const GAME_SEEN_MAX: usize = 1500;
+
+/// The guild window's "last online" times in one SavedVariables file. An entry that is not a plain
+/// identity with a time is left out; the server checks again.
+pub fn export_game_seen(globals: &BTreeMap<String, Value>) -> Vec<GameSeen> {
+    let list = globals
+        .get("EmberlightDB")
+        .and_then(Value::as_table)
+        .and_then(|db| field(db, "localData"))
+        .and_then(Value::as_table)
+        .and_then(|l| field(l, "guildSeen"))
+        .and_then(Value::as_table)
+        .and_then(|g| field(g, "characters"))
+        .and_then(Value::as_table);
+    let mut out = Vec::new();
+    for (key, value) in list.into_iter().flat_map(|t| t.iter()) {
+        let Some(character) = identity_key(key) else { continue };
+        let Some(seen_at) = value.as_int().filter(|n| *n > 0) else { continue };
+        out.push(GameSeen { character, seen_at });
+    }
+    out
+}
+
+fn identity_key(key: &Key) -> Option<String> {
+    let Key::Str(bytes) = key else { return None };
+    let t = std::str::from_utf8(bytes).ok()?;
+    let ok = !t.is_empty() && t.len() <= 120 && t.contains('-') && clean(t) && !t.chars().any(char::is_whitespace);
+    ok.then(|| t.to_owned())
 }
 
 /// The professions this account's characters have, as the addon recorded them under
@@ -991,6 +1033,21 @@ mod tests {
             Recipe { name: "".into(), item_id: Some(2569), spell_id: None, reagents: vec![] },
             Recipe { name: "Brown Linen Pants".into(), item_id: Some(4343), spell_id: None, reagents: vec![] },
         ]);
+    }
+
+    #[test]
+    fn guild_window_last_online_times_are_read_and_sent_in_the_server_shape() {
+        let src = br#"EmberlightDB = { schemaVersion = 3, localData = { guildSeen = { at = 1800003600, characters = {
+            ["alice_example-testrealm"] = 1800000000,
+            ["no realm"] = 1800000000,
+            ["bad|name-testrealm"] = 1800000000,
+            ["bob_example-testrealm"] = "soon",
+            [1] = 1800000000,
+        } } } }"#;
+        let seen = export_game_seen(&crate::lua::parse(src).unwrap());
+        assert_eq!(seen, vec![GameSeen { character: "alice_example-testrealm".into(), seen_at: 1800000000 }]);
+        assert_eq!(serde_json::to_value(&seen[0]).unwrap(), serde_json::json!({ "character": "alice_example-testrealm", "seenAt": 1800000000 }));
+        assert!(export_game_seen(&crate::lua::parse(b"EmberlightDB = { localData = {} }").unwrap()).is_empty());
     }
 
     #[test]

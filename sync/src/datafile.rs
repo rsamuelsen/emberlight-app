@@ -26,6 +26,12 @@ pub const CRAFTING_FILE: &str = "Crafting.lua";
 const CRAFTING_GLOBAL: &str = "EmberlightCrafting";
 pub const CRAFTING_FORMAT: i64 = 1;
 const CRAFTING_REQUESTS: usize = 100;
+/// The guild's newest published addon version, as the Companion's last update check saw it
+/// (`Latest.lua`, global `EmberlightLatest`), so the addon can say it is out of date even when no
+/// guildmate is online. Addons before 0.9.0 never read it.
+pub const LATEST_FILE: &str = "Latest.lua";
+const LATEST_GLOBAL: &str = "EmberlightLatest";
+pub const LATEST_FORMAT: i64 = 1;
 /// Limits that keep a damaged reply from writing a huge file; far above any real guild.
 const ROSTER_MEMBERS: usize = 2000;
 const ROSTER_CHARACTERS: usize = 50;
@@ -311,8 +317,27 @@ pub fn read_interface(addons: &Path) -> Result<String> {
 
 pub fn render_toc(interface: &str) -> String {
     format!(
-        "## Interface: {interface}\n## Title: Emberlight Data\n## Notes: Guild records downloaded by the Emberlight sync tool.\n## Author: Emberlight\n## Version: {FORMAT}\nData.lua\nRoster.lua\nCrafting.lua\n"
+        "## Interface: {interface}\n## Title: Emberlight Data\n## Notes: Guild records downloaded by the Emberlight sync tool.\n## Author: Emberlight\n## Version: {FORMAT}\nData.lua\nRoster.lua\nCrafting.lua\nLatest.lua\n"
     )
+}
+
+/// A plain version number ("0.9.1"), nothing else.
+fn plain_version(v: &str) -> bool {
+    !v.is_empty() && v.len() <= 16 && v.bytes().all(|b| b.is_ascii_digit() || b == b'.') && v.split('.').count() == 3 && v.split('.').all(|p| !p.is_empty())
+}
+
+pub fn render_latest(version: Option<&str>, checked: i64) -> String {
+    match version.filter(|v| plain_version(v)) {
+        Some(v) => format!("{LATEST_GLOBAL} = {{\n\tformat = {LATEST_FORMAT},\n\tchecked = {checked},\n\taddon = {},\n}}\n", lua_string(v)),
+        None => format!("{LATEST_GLOBAL} = {{\n\tformat = {LATEST_FORMAT},\n\tchecked = {checked},\n}}\n"),
+    }
+}
+
+/// Write `<addons>/Emberlight_Data/Latest.lua`. Callers must first confirm the game is not running.
+pub fn write_latest(addons: &Path, version: Option<&str>, checked: i64) -> Result<()> {
+    let dir = addons.join(ADDON_DIR);
+    fs::create_dir_all(&dir).with_context(|| format!("cannot create {}", dir.display()))?;
+    write_atomic(&dir.join(LATEST_FILE), render_latest(version, checked).as_bytes())
 }
 
 fn write_atomic(path: &Path, contents: &[u8]) -> Result<()> {
@@ -402,6 +427,10 @@ pub fn write_data_addon(addons: &Path, archive: &Archive) -> Result<WriteReport>
     if !crafting.exists() {
         write_atomic(&crafting, render_crafting(None).as_bytes())?;
     }
+    let latest = dir.join(LATEST_FILE);
+    if !latest.exists() {
+        write_atomic(&latest, render_latest(None, 0).as_bytes())?;
+    }
     write_atomic(&dir.join(format!("{ADDON_DIR}.toc")), render_toc(&interface).as_bytes())?;
     Ok(WriteReport { dir, written: out.notices.len(), rejected, roster: None, roster_problem: None })
 }
@@ -473,9 +502,22 @@ mod tests {
         write_data_addon(dir.path(), &Archive::default()).unwrap();
         let data = dir.path().join(ADDON_DIR);
         assert!(fs::read_to_string(data.join(ROSTER_FILE)).unwrap().contains("Bob Example"), "writing the notices keeps the roster");
-        assert!(fs::read_to_string(data.join(format!("{ADDON_DIR}.toc"))).unwrap().ends_with("Data.lua\nRoster.lua\nCrafting.lua\n"));
+        assert!(fs::read_to_string(data.join(format!("{ADDON_DIR}.toc"))).unwrap().ends_with("Data.lua\nRoster.lua\nCrafting.lua\nLatest.lua\n"));
         write_roster(dir.path(), None).unwrap();
         assert!(!fs::read_to_string(data.join(ROSTER_FILE)).unwrap().contains("Bob"));
+    }
+
+    #[test]
+    fn latest_file_holds_only_a_plain_version() {
+        assert_eq!(render_latest(Some("0.9.1"), 5), "EmberlightLatest = {\n\tformat = 1,\n\tchecked = 5,\n\taddon = \"0.9.1\",\n}\n");
+        for bad in ["0.9", "0.9.1\"..x", "", "1..2", "a.b.c"] {
+            assert!(!render_latest(Some(bad), 5).contains("addon ="), "{bad}");
+        }
+        let text = render_latest(Some("1.2.3"), 9);
+        let parsed = lua::parse(text.as_bytes()).unwrap();
+        let latest = parsed["EmberlightLatest"].as_table().unwrap();
+        assert_eq!(field(latest, "addon").and_then(Value::as_bytes), Some(&b"1.2.3"[..]));
+        assert_eq!(field(latest, "checked").and_then(Value::as_int), Some(9));
     }
 
     #[test]

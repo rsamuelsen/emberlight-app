@@ -243,7 +243,7 @@ pub fn update_addon(settings: &Settings) -> Result<AddonOutcome, String> {
     let tags = paths::folder_tags(&root.join(&settings.flavor));
     let outcome = update::check_and_install(&settings.server, &dir, Some(&tags), update::RELEASE_PUBLIC_KEY, env!("CARGO_PKG_VERSION"))
         .map_err(|e| sentence(&e.to_string()))?;
-    Ok(match outcome {
+    let outcome: AddonOutcome = match outcome {
         update::Outcome::UpToDate(v) => ("current", format!("Emberlight {v} is up to date."), Some(v)),
         update::Outcome::NotPublished => ("unpublished", "The guild has not published an addon version yet.".into(), None),
         update::Outcome::Installed(i) => {
@@ -253,7 +253,18 @@ pub fn update_addon(settings: &Settings) -> Result<AddonOutcome, String> {
             };
             ("installed", message, Some(i.version))
         }
-    })
+    };
+    tell_addon_latest(&dir, &root, outcome.2.as_deref());
+    Ok(outcome)
+}
+
+/// The guild's newest addon version for the addon itself (`Emberlight_Data/Latest.lua`, addon
+/// 0.9.0), so it can say it is out of date even with no guildmate online. Only while the game is
+/// closed, like every other addon file; a failure is not worth a message.
+fn tell_addon_latest(addons: &Path, root: &Path, latest: Option<&str>) {
+    if latest.is_some() && wow::running_clients(Some(root)).is_empty() {
+        let _ = datafile::write_latest(addons, latest, now());
+    }
 }
 
 /// Only look: whether the guild has published a newer addon than the one installed. Allowed while
@@ -264,11 +275,13 @@ pub fn check_addon(settings: &Settings) -> Result<AddonOutcome, String> {
     let latest = update::latest_version(&settings.server, Some(&tags), update::RELEASE_PUBLIC_KEY, env!("CARGO_PKG_VERSION"))
         .map_err(|e| sentence(&e.to_string()))?;
     let installed = update::installed_version(&dir);
-    Ok(match (latest, installed) {
+    let outcome: AddonOutcome = match (latest, installed) {
         (None, _) => ("unpublished", "The guild has not published an addon version yet.".into(), None),
         (Some(l), Some(i)) if !update::is_newer(&l, &i) => ("current", format!("Emberlight {i} is up to date."), Some(l)),
         (Some(l), _) => ("available", format!("Emberlight {l} is ready to install."), Some(l)),
-    })
+    };
+    tell_addon_latest(&dir, &root, outcome.2.as_deref());
+    Ok(outcome)
 }
 
 pub fn restore_addon(settings: &Settings) -> Result<AddonOutcome, String> {

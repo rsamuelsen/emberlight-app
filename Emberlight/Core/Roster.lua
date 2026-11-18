@@ -50,7 +50,7 @@ function R.Key(name)
     return identity and identity:match("^[^-]+")
 end
 
--- Everyone in the in-game guild: name, key, rank name and rank index. Notes are never read. Also
+-- Everyone in the in-game guild: name, key, rank name, rank index and whether online. Notes are never read. Also
 -- returns how many members WoW says the guild has, which is more than the list when the game
 -- leaves offline members out (the guild window's "Show offline members").
 function R.Guild()
@@ -58,10 +58,11 @@ function R.Guild()
     local total = tonumber((GetNumGuildMembers())) or 0
     local list = {}
     for i = 1, total do
-        local name, rank, index = GetGuildRosterInfo(i)
+        local name, rank, index, _, _, _, _, _, online = GetGuildRosterInfo(i)
         local key = type(name) == "string" and R.Key(name)
         if key and type(index) == "number" then
-            list[#list + 1] = { name = E.Clean(name:match("^[^-]+"), 60), key = key, rank = E.Clean(rank or "", 40), index = index }
+            -- Online or not, for the dot before the name (0.9.0); full is the roster's own name.
+            list[#list + 1] = { name = E.Clean(name:match("^[^-]+"), 60), key = key, rank = E.Clean(rank or "", 40), index = index, online = online and true or false, full = name }
         end
     end
     return list, total

@@ -175,6 +175,8 @@ function U.CreateLauncher()
         GameTooltip:SetOwner(self, "ANCHOR_LEFT")
         GameTooltip:AddLine("Emberlight", .86, .68, .34)
         GameTooltip:AddLine("Click to open. Drag to move.", 1, 1, 1)
+        local newest = E.Presence and E.Presence.Newest()
+        if newest then GameTooltip:AddLine("Version " .. newest .. " is out. Please update.", 1, .35, .2) end
         GameTooltip:Show()
     end)
     b:SetScript("OnLeave", function() GameTooltip:Hide() end)
@@ -228,17 +230,17 @@ function U.Toggle()
 end
 
 -- "Are you sure": a small sheet over the page before something that cannot be undone.
-function U.Confirm(text, label, action, cancelLabel)
+function U.Confirm(text, label, action, cancelLabel, cancel)
     local s = U.confirmSheet
     if not s then
         s = U.Paper(U.frame, 470, 170)
         s:SetPoint("CENTER", 91, 0); s:SetFrameLevel(U.frame:GetFrameLevel() + 40); s:EnableMouse(true)
         s.text = at(U.FitText(U.Text(s, "", 15, C.ink, nil, "game"), 422, 72, true), 24, -24)
         s.yes = at(U.Button(s, "", 200, function() s:Hide(); if s.action then s.action() end end, "seal"), 24, -118)
-        s.no = at(U.Button(s, "Keep it", 210, function() s:Hide() end), 234, -118)
+        s.no = at(U.Button(s, "Keep it", 210, function() s:Hide(); if s.cancel then s.cancel() end end), 234, -118)
         U.confirmSheet = s
     end
-    s.text:SetText(text); s.yes.label:SetText(label); s.no.label:SetText(cancelLabel or "Keep it"); s.action = action
+    s.text:SetText(text); s.yes.label:SetText(label); s.no.label:SetText(cancelLabel or "Keep it"); s.action = action; s.cancel = cancel
     s:Show()
 end
 -- Ordinary drafts save as you type. Edits are separate, so warn before discarding those words.
@@ -257,6 +259,7 @@ function U.GoNow(tab)
     if U.nowSheet then U.nowSheet:Hide() end
     if U.answersSheet then U.answersSheet:Hide() end
     if U.lineSheet then U.lineSheet:Hide() end
+    if U.grandSheet then U.grandSheet:Hide() end
     U.expanded = false; U.homeView = nil
     U.filterWhen = "all"; U.filterKind = nil
     U.editing = nil; U.composeBoard = nil; U.tab = tab
@@ -347,6 +350,7 @@ function U.Create()
     close:HookScript("OnLeave", function() stud:SetVertexColor(.9, .9, .9) end)
     U.action = at(U.Button(f, "", 170, function()
         if U.homeView then U.Go("Home")
+        elseif U.tab == "Roster" then U.OpenGrand()
         elseif U.tab == "Write" then U.Go(U.returnTab or "Home") else U.StartCompose(U.tab) end
     end, "seal"), 688, -50)
     U.nowButton = at(U.Button(f, "Quick post", 120, function() U.OpenHereNow() end), 560, -50)
@@ -428,9 +432,10 @@ function U.Refresh()
     local official = (writing and U.composeBoard or U.tab) == "Noticeboard"
     U.pageTitle:SetText(U.homeView == "joining" and "You are joining" or U.homeView == "unread" and "Unread notices"
         or writing and (U.editing and "Edit" or official and "New guild event" or "New adventure") or U.labels[U.tab] or "")
-    U.action.label:SetText(U.homeView and "Back to Home" or writing and "Back" or official and "New guild event" or "New adventure")
+    U.action.label:SetText(U.homeView and "Back to Home" or writing and "Back" or U.tab == "Roster" and "Grand message" or official and "New guild event" or "New adventure")
     U.SetVariant(U.action, (writing or U.homeView) and "ink" or "seal")
-    U.action:SetShown(U.homeView ~= nil or writing or U.tab == "Letters" or U.tab == "Mine" or (U.tab == "Noticeboard" and officer()))
+    -- On the roster check, the officers' grand message (UI/Grand.lua).
+    U.action:SetShown(U.homeView ~= nil or writing or U.tab == "Letters" or U.tab == "Mine" or (U.tab == "Noticeboard" and officer()) or (U.tab == "Roster" and U.RosterAllowed()))
     U.nowButton:SetShown(U.tab == "Letters" and not U.homeView)
     U.home:SetShown(U.tab == "Home")
     U.reader:SetShown(U.homeView ~= nil or U.tab == "Noticeboard" or U.tab == "Letters" or U.tab == "Mine")
@@ -485,6 +490,9 @@ function U.CreateHome()
     local page = newPage(); U.home = page
     caps(page, "Next guild event", 244, -104)
     U.homeSeal = at(seal(page, 56), 836, -112)
+    -- Officers only: how many online use Emberlight; a click opens the roster check's list.
+    U.homeUsage = at(U.Button(page, "", 250, function() U.rosterView = "addon"; U.Go("Roster") end, "bare"), 560, -98)
+    U.homeUsage:SetHeight(24)
     U.homeArt = drawing(page, kindArt[4], 60, 60); U.homeArt:SetPoint("TOPLEFT", 240, -124)
     U.homeTitle = at(U.FitText(U.Text(page, "", 22, C.ink, nil, "game"), 520, 28, false), 308, -124)
     U.homeWhen = at(U.FitText(U.Text(page, "", 16, C.paperMuted), 654, 38, true), 244, -158)
@@ -527,6 +535,10 @@ function U.RefreshHome()
     U.homeJoin:SetEnabled(E.Sync.Ready() or false)
     U.joiningAll:SetShown(#joining > 0); U.freshAll:SetShown(#fresh > 0)
     U.homeSeal:SetShown(nextEvent ~= nil and not nextEvent.read and not nextEvent.own)
+    local using, online = nil, nil
+    if U.RosterAllowed and U.RosterAllowed() then using, online = E.Presence.Usage() end
+    U.homeUsage:SetShown(using ~= nil)
+    if using then U.homeUsage.label:SetText(using .. " of " .. online .. " online use Emberlight") end
     U.homeArt:SetShown(nextEvent ~= nil)
     U.homeOpen:SetShown(nextEvent ~= nil)
     U.homeOpen:ClearAllPoints(); at(U.homeOpen, canJoin and 394 or 244, -224)
@@ -1128,36 +1140,50 @@ function U.CreateSettings()
         U.frame:ClearAllPoints(); U.frame:SetPoint("CENTER"); U.ApplyScale(); U.RefreshSettings()
     end, "bare"), 244, -188)
     U.resetWindow:SetHeight(26)
-    at(U.Text(page, "Chat reminder", 14, C.paperMuted), 244, -230)
+    at(U.Text(page, "Chat reminder", 14, C.paperMuted), 244, -226)
     U.reminderToggle = at(U.Button(page, "", 200, function()
         S.db.settings.reminders = not S.db.settings.reminders; U.RefreshSettings()
-    end), 698, -220)
-    at(U.FitText(U.Text(page, "One line 15 minutes before something you are joining or hosting.", 14, C.paperMuted), 654, 34, true), 244, -254)
-    U.Rule(page, 244, -296, 654)
-    caps(page, "About", 244, -308)
-    U.aboutVersion = at(U.Text(page, "Emberlight " .. E.version, 15, C.paperMuted), 244, -330)
+    end), 698, -222)
+    at(U.FitText(U.Text(page, "One line 15 minutes before something you are joining or hosting.", 14, C.paperMuted), 440, 18, false), 244, -248)
+    -- The guild map (Core/Map.lua), off until the member chooses it.
+    at(U.Text(page, "Guild map", 14, C.paperMuted), 244, -276)
+    U.mapToggle = at(U.Button(page, "", 76, function()
+        E.Map.SetEnabled(not S.db.settings.guildMap); U.RefreshSettings()
+    end), 698, -272)
+    -- The flames' size: small, normal, large, round again.
+    U.flameSize = at(U.Button(page, "", 120, function()
+        local st = S.db.settings
+        st.flameSize = st.flameSize == 1 and 1.35 or st.flameSize == 1.35 and .75 or 1
+        U.RefreshSettings(); if U.RefreshMapPins then U.RefreshMapPins() end
+    end), 778, -272)
+    at(U.FitText(U.Text(page, "You and guildmates who turn it on see each other on the maps.", 14, C.paperMuted), 440, 18, false), 244, -298)
+    U.Rule(page, 244, -324, 654)
+    caps(page, "About", 244, -336)
+    U.aboutVersion = at(U.Text(page, "Emberlight " .. E.version, 15, C.paperMuted), 244, -358)
+    -- A newer version heard from guildmates (Core/Presence.lua), in the page's red.
+    U.aboutUpdate = at(U.FitText(U.Text(page, "", 15, C.wax), 520, 18, false), 378, -358)
     U.sharingHelp = at(U.Button(page, "How sharing works +", 230, function()
         U.settingsHelp = U.settingsHelp ~= "sharing" and "sharing" or nil; U.RefreshSettings()
-    end, "bare"), 244, -352)
+    end, "bare"), 244, -380)
     U.connectionHelp = at(U.FitText(U.Text(page,
         "Without the Companion, you receive a notice or answer when you and its writer are online with Emberlight at the same time. Received notices are kept on your computer. The Companion can also bring notices saved on the guild website into your next game session.",
-        15, C.paperMuted), 654, 100, true), 244, -386)
+        15, C.paperMuted), 654, 100, true), 244, -414)
     U.troubleshooting = at(U.Button(page, "Troubleshooting +", 230, function()
         U.settingsHelp = U.settingsHelp ~= "trouble" and "trouble" or nil; U.RefreshSettings()
-    end, "bare"), 244, -390)
-    U.permissions = at(U.FitText(U.Text(page, "", 14, C.paperMuted), 654, 48, true), 244, -430)
+    end, "bare"), 244, -418)
+    U.permissions = at(U.FitText(U.Text(page, "", 14, C.paperMuted), 654, 48, true), 244, -458)
     U.syncToggle = at(U.Button(page, "", 170, function()
         S.db.settings.guildSync = not S.db.settings.guildSync
         E.Sync.Reset(); E.Client.RequestRoster(); U.Refresh(); U.Status()
-    end), 244, -482)
+    end), 244, -510)
     U.syncRefresh = at(U.Button(page, "Check for notices", 200, function()
         E.Client.RequestRoster()
         U.Status(E.Sync.Refresh() and "Checking for notices..." or "Wait 30 seconds before checking again.")
-    end), 422, -482)
-    U.reportHint = at(U.Text(page, "Click the details, then Ctrl+C, for a bug report:", 14, C.paperMuted), 244, -524)
+    end), 422, -510)
+    U.reportHint = at(U.Text(page, "Click the details, then Ctrl+C, for a bug report:", 14, C.paperMuted), 244, -552)
     -- The version line doubles as the details for a bug report: a click selects all of it, ready
     -- for Ctrl+C (an addon cannot write the clipboard itself). Typing in it changes nothing.
-    U.buildInfo = at(CreateFrame("EditBox", nil, page), 244, -546)
+    U.buildInfo = at(CreateFrame("EditBox", nil, page), 244, -574)
     U.buildInfo:SetSize(654, 20)
     U.buildInfo:SetFont(STANDARD_TEXT_FONT, 14, "")
     U.buildInfo:SetTextColor(unpack(C.paperMuted))
@@ -1182,7 +1208,7 @@ function U.RefreshSettings()
     U.permissions:SetText(status .. (roster and ("\n" .. clean(roster[me].rank, 80) .. ": " .. (roster[me].officer and "You can post adventures and guild events." or "You can post adventures and answer guild events.")) or ""))
     U.sharingHelp.label:SetText("How sharing works " .. (U.settingsHelp == "sharing" and "-" or "+"))
     U.troubleshooting.label:SetText("Troubleshooting " .. (U.settingsHelp == "trouble" and "-" or "+"))
-    U.troubleshooting:ClearAllPoints(); at(U.troubleshooting, 244, U.settingsHelp == "sharing" and -494 or -390)
+    U.troubleshooting:ClearAllPoints(); at(U.troubleshooting, 244, U.settingsHelp == "sharing" and -522 or -418)
     U.connectionHelp:SetShown(U.settingsHelp == "sharing")
     for _, widget in ipairs({U.permissions,U.syncToggle,U.syncRefresh,U.reportHint,U.buildInfo}) do widget:SetShown(U.settingsHelp == "trouble") end
     local chosen = S.db.settings.windowScale
@@ -1199,6 +1225,12 @@ function U.RefreshSettings()
     end
     U.minimapToggle.label:SetText(S.db.settings.minimap.hide and "Hidden" or "Shown")
     U.reminderToggle.label:SetText(S.db.settings.reminders and "On" or "Off")
+    U.mapToggle.label:SetText(S.db.settings.guildMap and "On" or "Off")
+    local size = S.db.settings.flameSize
+    U.flameSize.label:SetText("Size: " .. (size == .75 and "Small" or size == 1.35 and "Large" or "Normal"))
+    U.flameSize:SetEnabled(S.db.settings.guildMap)
+    local newest = E.Presence.Newest()
+    U.aboutUpdate:SetText(newest and ("Version " .. newest .. " is out. Please update.") or "")
     U.buildInfo:SetText(U.ReportDetails())
     U.buildInfo:SetCursorPosition(0) -- show the start of the line, not its end
 end

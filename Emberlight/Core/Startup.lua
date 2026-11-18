@@ -10,9 +10,13 @@ startup:SetScript("OnEvent", function(self, _, loaded)
         E.Sync.Start()
         E.Professions.Start()
         E.GuildBank.Start()
+        E.GuildSeen.Start()
+        E.Presence.Start()
+        E.Map.Start()
     end
     E.startupProblem = problem
     E.UI.CreateLauncher()
+    if db then E.UI.StartMapPins() end
     if db then C_Timer.NewTicker(30, E.UI.CheckReminders) end
 end)
 -- A key to open and close the window, set by the member under Key Bindings, AddOns (Bindings.xml).
@@ -42,6 +46,31 @@ SlashCmdList.EMBERLIGHT = function(message)
         -- Opens the window on Crafting; the slash command is only a shortcut.
         if E.UI.frame and E.UI.frame:IsShown() then E.UI.Go("Crafting")
         else E.UI.Toggle(); if E.UI.frame and E.UI.frame:IsShown() then E.UI.Go("Crafting") end end
+    elseif type(message) == "string" and message:lower():match("^%s*map%s*%a*%s*$") then
+        local choice = message:lower():match("^%s*map%s+(%a+)")
+        if (choice == "on" or choice == "off") and E.Store.db then E.Map.SetEnabled(choice == "on") end
+        local on = E.Store.db and E.Store.db.settings.guildMap
+        DEFAULT_CHAT_FRAME:AddMessage(on and "Emberlight: the guild map is on. Guildmates who turned it on too see you as a flame on their maps, and you see them. Never shared in dungeons, raids or battlegrounds. Type /emberlight map off to stop."
+            or "Emberlight: the guild map is off. Nobody sees you on their map. Type /emberlight map on to share and see guildmates who share.")
+    elseif type(message) == "string" and message:lower():match("^%s*test%s+grand%s*$") then
+        E.Presence.TestGrand()
+    elseif type(message) == "string" and message:lower():match("^%s*test%s+update%s*$") then
+        E.Presence.TestUpdate()
+    elseif type(message) == "string" and message:lower():match("^%s*help%s*$") then
+        for _, line in ipairs({
+            "Emberlight commands:",
+            "/emberlight: open or close the window",
+            "/emberlight map on | off: show yourself and guildmates on the maps, or not",
+            "/emberlight verify CODE: prove a character is yours (the website gives the code)",
+            "/emberlight professions on | off: share your professions with the website, or not",
+            "/emberlight requests: open Crafting",
+            "/emberlight test grand | test update: see a grand message or the update notice, on your screen only",
+            "/emberlight info: version, character and guild, for a bug report",
+            "Officers: /emberlight grand TEXT sends a grand message; /emberlight bank on | off reads the guild bank log",
+        }) do DEFAULT_CHAT_FRAME:AddMessage(line, 1, .82, .35) end
+    elseif type(message) == "string" and message:lower():match("^%s*grand%s") then
+        local ok, problem = E.Presence.SendGrand(message:match("^%s*%a+%s+(.*)$"))
+        if not ok then DEFAULT_CHAT_FRAME:AddMessage("Emberlight: " .. problem) end
     elseif type(message) == "string" and message:match("^%s*[Ii][Nn][Ff][Oo]%s*$") then
         for _, line in ipairs(E.Client.Info()) do DEFAULT_CHAT_FRAME:AddMessage("Emberlight: " .. line) end
     else

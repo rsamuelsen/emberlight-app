@@ -1,6 +1,6 @@
 //! Client for the Emberlight server (server/ in this repository).
 
-use crate::records::{BankScan, Notice, ProfessionScan, Proof, Removal, Removed, Reply};
+use crate::records::{BankScan, GameSeen, Notice, ProfessionScan, Proof, Removal, Removed, Reply};
 use anyhow::{Context, Result, bail};
 use reqwest::blocking::{Client as Http, RequestBuilder};
 use reqwest::{StatusCode, Url};
@@ -369,6 +369,26 @@ impl Client {
             out.extend(reply.results);
         }
         Ok(out)
+    }
+
+    /// When guildmates' characters were last in game, as the guild window showed it
+    /// (`POST /v1/activity/game`, addon 0.8.15). Returns how many members the server found later.
+    /// An older server answers 404; the caller treats any failure as "not sent".
+    pub fn upload_game_seen(&self, seen: &[GameSeen]) -> Result<usize> {
+        #[derive(Serialize)]
+        struct Body<'a> {
+            characters: &'a [GameSeen],
+        }
+        #[derive(Deserialize)]
+        struct Reply2 {
+            updated: usize,
+        }
+        let mut updated = 0;
+        for chunk in seen.chunks(500) {
+            let reply: Reply2 = self.send(self.http.post(self.url("/v1/activity/game")).json(&Body { characters: chunk }))?;
+            updated += reply.updated;
+        }
+        Ok(updated)
     }
 
     /// Character proofs this computer saw in game; the server matches them to waiting claims.

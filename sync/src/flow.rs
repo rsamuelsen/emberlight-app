@@ -19,6 +19,8 @@ pub struct PushReport {
     pub professions: usize,
     /// Guild bank log scans the website took (officers only, addon 0.8.14).
     pub bank_scans: usize,
+    /// Guildmates' characters whose last time in game the website now has later (addon 0.8.15).
+    pub game_seen: usize,
     pub stored: usize,
     /// Of `stored`, how many were notices, replies and removals, so a member can be told what went.
     pub stored_notices: usize,
@@ -54,12 +56,14 @@ pub fn push(client: &Client, files: &[PathBuf], now: i64) -> Result<PushReport> 
     let (mut notices, mut replies, mut removals, mut proofs, mut professions) = (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
     let mut relayed = Vec::new();
     let mut bank = Vec::new();
+    let mut game_seen = Vec::new();
     for file in files {
         let parsed = std::fs::read(file).map_err(anyhow::Error::from).and_then(|b| Ok(lua::parse(&b)?)).and_then(|g| {
             proofs.extend(records::export_proofs(&g));
             professions.extend(records::export_professions(&g));
             relayed.extend(records::export_relayed_professions(&g));
             bank.extend(records::export_bank_scans(&g));
+            game_seen.extend(records::export_game_seen(&g));
             records::export_notices(&g, Some(now))
         });
         match parsed {
@@ -140,6 +144,19 @@ pub fn push(client: &Client, files: &[PathBuf], now: i64) -> Result<PushReport> 
             }
             Err(e) => report.problems.push(format!("The guild bank log was not sent: {e:#}")),
         }
+    }
+    // When guildmates were last in game, from the guild window (addon 0.8.15), for the officers'
+    // activity overview. The newest time per character across this computer's WoW accounts, from
+    // the last 90 days. Optional: a failure (an older server) never stops the sync.
+    game_seen.retain(|s: &records::GameSeen| s.seen_at <= now + 300 && now - s.seen_at < 90 * 86400);
+    game_seen.sort_by(|a, b| a.character.cmp(&b.character).then(b.seen_at.cmp(&a.seen_at)));
+    game_seen.dedup_by(|a, b| a.character == b.character);
+    game_seen.sort_by_key(|s| std::cmp::Reverse(s.seen_at));
+    game_seen.truncate(records::GAME_SEEN_MAX);
+    if !game_seen.is_empty()
+        && let Ok(updated) = client.upload_game_seen(&game_seen)
+    {
+        report.game_seen = updated;
     }
     Ok(report)
 }

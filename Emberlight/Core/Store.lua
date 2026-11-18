@@ -30,6 +30,11 @@ function S.Init(saved)
     st.minimap.hide = st.minimap.hide == true
     -- One line in chat before something the member joined; on unless they switch it off.
     st.reminders = st.reminders ~= false
+    -- The guild map (0.9.0, Core/Map.lua): on unless the member switched it off (owner's decision,
+    -- 18 November 2026). The first time, one line in chat says so and how to switch it off.
+    if type(st.guildMap) ~= "boolean" then st.guildMap = true end
+    -- How big the flames are: .75, 1 or 1.35.
+    if st.flameSize ~= .75 and st.flameSize ~= 1.35 then st.flameSize = 1 end
     saved.localData.reminded = type(saved.localData.reminded) == "table" and saved.localData.reminded or {}
     -- Character proofs this client saw another member send (/emberlight verify), for the sync
     -- tool to report to the website (since 0.9.x).
@@ -42,6 +47,9 @@ function S.Init(saved)
     -- Core/GuildBank.lua), read by the Companion. On unless the officer typed /emberlight bank off.
     saved.localData.bankScans = type(saved.localData.bankScans) == "table" and saved.localData.bankScans or {}
     if type(st.readBankLog) ~= "boolean" then st.readBankLog = true end
+    -- When guildmates were last in game, as the guild window shows it (0.8.15, Core/GuildSeen.lua),
+    -- read by the Companion for the officers' activity overview.
+    saved.localData.guildSeen = type(saved.localData.guildSeen) == "table" and saved.localData.guildSeen or {}
     saved.guildData = type(saved.guildData) == "table" and saved.guildData or {}
     S.db = saved
     return saved

@@ -64,11 +64,11 @@ SlashCmdList.EMBERLIGHT = function(message)
             "/emberlight verify CODE: prove a character is yours (the website gives the code)",
             "/emberlight professions on | off: share your professions with the website, or not",
             "/emberlight requests: open Crafting",
-            "/emberlight test grand | test update: see a grand message or the update notice, on your screen only",
+            "/emberlight test grand | test update: see an announcement or the update notice, on your screen only",
             "/emberlight info: version, character and guild, for a bug report",
-            "Officers: /emberlight grand TEXT sends a grand message; /emberlight bank on | off reads the guild bank log",
+            "Officers: /emberlight announce TEXT (or grand TEXT) sends an announcement; /emberlight bank on | off reads the guild bank log",
         }) do DEFAULT_CHAT_FRAME:AddMessage(line, 1, .82, .35) end
-    elseif type(message) == "string" and message:lower():match("^%s*grand%s") then
+    elseif type(message) == "string" and (message:lower():match("^%s*grand%s") or message:lower():match("^%s*announce%s")) then
         local ok, problem = E.Presence.SendGrand(message:match("^%s*%a+%s+(.*)$"))
         if not ok then DEFAULT_CHAT_FRAME:AddMessage("Emberlight: " .. problem) end
     elseif type(message) == "string" and message:match("^%s*[Ii][Nn][Ff][Oo]%s*$") then

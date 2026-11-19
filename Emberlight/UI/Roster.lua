@@ -3,12 +3,12 @@ local U, R = E.UI, E.Roster
 local C = U.colors
 local function at(widget, x, y) widget:SetPoint("TOPLEFT", x, y); return widget end
 
--- The officers' roster check: a place in the rail for the guild master (rank 0), Flame Keepers
--- and Officer Alts only, the same in-game authority as posting guild events. Two views: "Roster check" (everyone in
+-- The officers' roster check: a page for the guild master (rank 0), Flame Keepers
+-- and Officer Alts only, the same in-game authority as posting guild events. Three views: "Roster check" (everyone in
 -- the guild, against the website), "Needs an invite" (members' characters not in the guild) and
 -- "Addon users" (who online uses Emberlight, and which version; Core/Presence.lua). A dot before
 -- each name in the guild shows who is online now: green online, grey offline.
-U.labels.Roster = "Roster check"
+U.labels.Roster = "Officer desk"
 U.rosterView = "check"
 
 function U.RosterAllowed()
@@ -19,24 +19,27 @@ function U.RosterAllowed()
 end
 
 -- The columns of a line: character, main or alt, rank in game, and a note.
-local columns = { { 22, 212 }, { 240, 64 }, { 310, 150 }, { 466, 156 } }
+local WARN = { 1, .58, .5 }
+local columns = { { 22, 252 }, { 282, 82 }, { 380, 170 }, { 568, 282 } }
 local dotColors = { online = { .25, .8, .3 }, offline = { .55, .52, .47, .6 } }
 local function line(i)
     local r = U.rosterRows[i]
     if r then return r end
     r = CreateFrame("Frame", nil, U.rosterChild)
-    r:SetSize(626, 24)
+    r:SetSize(858, 28)
+    r.band = U.Inlay(r, 0, 0, 856, 28, {.27,.12,.14,1})
     r.cells = {}
     for c, col in ipairs(columns) do
-        r.cells[c] = at(U.FitText(U.Text(r, "", 14, C.ink, nil, "game"), col[2], 18, false), col[1], -4)
+        r.cells[c] = at(U.FitText(U.Text(r, "", 14, C.ivory, nil, "game"), col[2], 0, true), col[1], -4)
     end
-    r.head = at(U.FitText(U.Text(r, "", 14, C.brown, nil, "caps"), 618, 18, false), 4, -6)
+    r.head = at(U.FitText(U.Text(r, "", 14, C.brown, nil, "caps"), 850, 18, false), 4, -6)
+    r.presence = at(U.FitText(U.Text(r, "", 14, C.muted), 72, 20, false), 204, -4)
     r.dot = r:CreateTexture(nil, "ARTWORK")
     r.dot:SetSize(10, 10)
     r.dot:SetTexture("Interface\\AddOns\\Emberlight\\Media\\Dot.tga")
     r.rule = r:CreateTexture(nil, "ARTWORK")
     r.rule:SetPoint("BOTTOMLEFT"); r.rule:SetPoint("BOTTOMRIGHT"); r.rule:SetHeight(1)
-    r.rule:SetColorTexture(.361, .325, .271, .3)
+    r.rule:SetColorTexture(.9, .85, .7, .12)
     U.rosterRows[i] = r
     return r
 end
@@ -45,8 +48,12 @@ function U.CreateRoster()
     local page = CreateFrame("Frame", nil, U.frame)
     page:SetPoint("TOPLEFT", 0, -16); page:SetPoint("BOTTOMRIGHT", 0, -16)
     U.rosterPage = page
+    U.Inlay(page, 8, -144, 944, 74, {.18,.087,.095,1})
+    U.Inlay(page, 8, -219, 944, 28, {.26,.18,.17,1})
+    -- The list sits on a dark panel like the other pages; the rows are light on dark so it stays easy to read.
+    U.Inlay(page, 8, -248, 944, 388, {.06,.085,.115,.97})
     U.rosterChips = {}
-    local x = 244
+    local x = 38
     for _, chip in ipairs({ { "check", "Roster check", 120 }, { "invite", "Needs an invite", 140 }, { "addon", "Addon users", 120 } }) do
         local button = at(U.Button(page, chip[2], chip[3], function()
             U.rosterView = chip[1]; U.rosterList:SetVerticalScroll(0); U.RefreshRoster()
@@ -57,24 +64,25 @@ function U.CreateRoster()
     end
     U.rosterAgain = at(U.Button(page, "Check again", 130, function()
         E.Client.RequestRoster(); E.Sync.Refresh(); U.RefreshRoster(); U.Status("Checked again. WoW may take a moment to send the whole guild.")
-    end), 768, -100)
+    end), 385, -53)
     U.rosterAgain:SetHeight(28)
-    U.rosterSummary = at(U.FitText(U.Text(page, "", 14, C.paperMuted, nil, "game"), 654, 52, true), 244, -136)
+    U.rosterSummary = at(U.FitText(U.Text(page, "", 14, C.ivory, nil, "game"), 880, 65, true), 38, -152)
     -- Shown only when WoW leaves offline members out of the guild list.
     U.rosterOffline = at(U.Button(page, "Show offline", 124, function()
         if SetGuildRosterShowOffline then SetGuildRosterShowOffline(true) end
         E.Client.RequestRoster(); U.RefreshRoster()
-    end), 640, -100)
+    end), 522, -53)
     U.rosterOffline:SetHeight(28)
     U.rosterHeads = {}
-    for c, label in ipairs({ "Character", "", "In-game rank", "" }) do
-        U.rosterHeads[c] = at(U.FitText(U.Text(page, label, 14, C.brown, nil, "caps"), columns[c][2], 18, false), 244 + columns[c][1], -194)
+    for c, label in ipairs({ "Character", "Main / alt", "In-game rank", "Details" }) do
+        U.rosterHeads[c] = at(U.FitText(U.Text(page, label, 14, C.goldHi, nil, "caps"), columns[c][2], 18, false), 38 + columns[c][1], -225)
     end
-    U.Rule(page, 244, -214, 654)
-    local list = U.Scroll(page, 654, 356)
-    list:SetPoint("TOPLEFT", 244, -218)
+    U.presenceHeading = at(U.FitText(U.Text(page, "Status", 14, C.goldHi), 72, 18, false), 242, -225)
+    U.Rule(page, 38, -244, 884)
+    local list = U.Scroll(page, 884, 326)
+    list:SetPoint("TOPLEFT", 38, -250)
     local child = CreateFrame("Frame", nil, list)
-    child:SetSize(626, 356); list:SetScrollChild(child)
+    child:SetSize(858, 326); list:SetScrollChild(child)
     U.rosterList, U.rosterChild, U.rosterRows = list, child, {}
     page:Hide()
 end
@@ -159,32 +167,39 @@ function U.RefreshRoster()
     if not U.rosterPage then return end
     for _, chip in ipairs(U.rosterChips) do U.SelectButton(chip, chip.key == U.rosterView) end
     for _, r in ipairs(U.rosterRows) do r:Hide() end
-    local website = R.Website()
+    local addonUsers = U.rosterView == "addon"
+    local website
+    if not addonUsers then website = R.Website() end
     local guild, total = R.Guild()
-    local ready = website ~= nil and guild ~= nil
+    local ready = (addonUsers or website ~= nil) and guild ~= nil
     U.rosterList:SetShown(ready)
-    for _, h in ipairs(U.rosterHeads) do h:SetShown(ready) end
+    U.presenceHeading:SetShown(ready and U.rosterView == "check")
+    for i, h in ipairs(U.rosterHeads) do h:SetShown(ready and (i ~= 2 or not addonUsers)) end
     U.rosterOffline:Hide()
-    if not website then
+    if not addonUsers and not website then
         U.rosterSummary:SetText("No member list yet. Sync in Emberlight Companion before you start the game: an officer's Companion brings the website's member list with each sync.")
         return
     end
     if not guild then U.rosterSummary:SetText("You are not in a guild on this character."); return end
-    local result = R.Check(website, guild)
+    local result = website and R.Check(website, guild)
     local notes = {}
-    notes[#notes + 1] = "Website list from " .. stamp(website.generated) .. "."
-    if website.generated and E.Client.Now() - website.generated > R.staleAfter then notes[#notes + 1] = "It is a few days old: sync again for a current one." end
-    if not website.fresh then notes[#notes + 1] = "Discord ranks may be out of date (Warden had not checked them lately)." end
+    if website then
+        notes[#notes + 1] = "Website list from " .. stamp(website.generated) .. "."
+        if website.generated and E.Client.Now() - website.generated > R.staleAfter then notes[#notes + 1] = "It is a few days old: sync again for a current one." end
+        if not website.fresh then notes[#notes + 1] = "Discord ranks may be out of date (Warden had not checked them lately)." end
+    end
     local online = 0
     for _, entry in ipairs(guild) do if entry.online then online = online + 1 end end
     if U.rosterView == "addon" then
-        notes[#notes + 1] = plural(online, "member", "members") .. " online. An Emberlight from this version on answers with its version within a minute or so; an older one, or one with messages paused, is not heard."
+        local using, heardOnline = E.Presence.Usage()
+        notes[#notes + 1] = (using and (using .. " of " .. heardOnline .. " online use Emberlight.") or
+            (plural(online, "member", "members") .. " online.")) .. " Version replies can take a minute."
     elseif U.rosterView == "invite" then
         notes[#notes + 1] = plural(result.missing, "character", "characters") .. " of " .. plural(#result.invite, "member", "members") .. " not in the guild."
     else
         notes[#notes + 1] = plural(#guild, "character", "characters") .. " in the guild, " .. online .. " online now: " .. #result.notOnWebsite .. " not on the website, " .. #result.wrongRank .. " with a different rank."
     end
-    if total and #guild < total then
+    if not addonUsers and total and #guild < total then
         notes[#notes + 1] = "WoW listed only " .. #guild .. " of " .. total .. " guild members, so this is not the whole guild."
         U.rosterOffline:SetShown(SetGuildRosterShowOffline ~= nil)
     end
@@ -194,22 +209,32 @@ function U.RefreshRoster()
         local r = line(i)
         r:ClearAllPoints(); r:SetPoint("TOPLEFT", 0, -y)
         r.head:SetShown(item.head ~= nil)
+        local contentHeight = 18
+        local showPresence = U.rosterView == "check" and item.online ~= nil
+        r.presence:SetShown(showPresence)
+        r.presence:SetText(showPresence and (item.online and "Online" or "Offline") or "")
+        local nameWidth = showPresence and 174 or columns[1][2]
+        r.cells[1]:SetWidth(item.muted and 824 or nameWidth - (item.indent and 16 or 0))
         for c, cell in ipairs(r.cells) do
             local value = item.cells and item.cells[c] or ""
             cell:SetShown(item.head == nil)
             cell:SetText(value)
-            cell:SetTextColor(unpack(item.muted and C.paperMuted or (item.warn and c == 4) and C.wax or (c == 2 or c == 4) and C.paperMuted or C.ink))
+            contentHeight = math.max(contentHeight, cell:GetStringHeight())
+            cell:SetTextColor(unpack(item.muted and C.muted or (item.warn and c == 4) and WARN or (c == 2 or c == 4) and C.muted or C.ivory))
         end
         -- An alt sits a little in from its member's main.
         r.cells[1]:ClearAllPoints(); r.cells[1]:SetPoint("TOPLEFT", columns[1][1] + (item.indent and 16 or 0), -4)
-        r.cells[1]:SetWidth(item.muted and 600 or columns[1][2] - (item.indent and 16 or 0))
         r.dot:ClearAllPoints(); r.dot:SetPoint("TOPLEFT", 6 + (item.indent and 16 or 0), -8)
         r.dot:SetShown(item.head == nil and not item.muted and item.online ~= nil)
         r.dot:SetVertexColor(unpack(item.online and dotColors.online or dotColors.offline))
         r.rule:SetShown(item.head == nil and not item.muted)
         if item.head then r.head:SetText(item.head) end
-        local height = item.head and (i == 1 and 28 or 40) or 24
+        local height = item.head and (i == 1 and 28 or 40) or contentHeight + 12
         r.head:ClearAllPoints(); r.head:SetPoint("TOPLEFT", 4, (item.head and i > 1) and -18 or -6)
+        r.band:SetHeight(height - 2)
+        if item.head then r.band:SetColorTexture(.27,.15,.15,1)
+        else r.band:SetColorTexture(1, 1, 1, i % 2 == 0 and .045 or 0) end
+        r.head:SetTextColor(unpack(C.ivory))
         r:SetHeight(height)
         r:Show()
         y = y + height

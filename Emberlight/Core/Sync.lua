@@ -221,9 +221,10 @@ function N.Reset()
     N.guild = nil; N.queue = {}; N.partial = {}; N.peers = {}; N.lastHello = nil; N.lastSnapshot = nil; N.snapshotAt = nil; N.lastError=nil; N.retryAt=nil
 end
 function N.Changed()
+    if E.UI and E.UI.tracker and E.UI.UpdateTracker then E.UI.UpdateTracker() end
     if E.UI and E.UI.UpdateLauncherBadge then E.UI.UpdateLauncherBadge() end
     if E.UI and E.UI.frame and E.UI.frame:IsShown() then
-        if E.UI.tab == "Noticeboard" or E.UI.tab == "Letters" or E.UI.tab == "Mine" then E.UI.RefreshReader() end
+        if E.UI.reader and E.UI.reader:IsShown() then E.UI.RefreshReader() end
         if E.UI.tab == "Home" then E.UI.RefreshHome() end
         if E.UI.tab == "Supplies" then E.UI.RefreshSupplies() end
         if E.UI.tab == "Settings" then E.UI.RefreshSettings() end

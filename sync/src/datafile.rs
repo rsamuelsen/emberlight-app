@@ -3,7 +3,7 @@
 //! WoW loads addon files at login and `/reload` and never writes them back, so updating this
 //! folder cannot race the game's own SavedVariables save.
 
-use crate::api::{CraftRequests, RosterCheck};
+use crate::api::{CraftDirectory, CraftRequests, RosterCheck};
 use crate::lua::{self, Value, field};
 use crate::records::{self, Notice, Removed, Reply, Skipped};
 use anyhow::{Context, Result, bail};
@@ -224,11 +224,37 @@ pub fn render_crafting(requests: Option<&CraftRequests>) -> String {
     s
 }
 
+fn render_directory(out: &mut String, directory: &CraftDirectory, generated: i64) {
+    let characters: BTreeMap<_, _> = directory.characters.iter().take(5000)
+        .filter(|c| c.id > 0 && roster_text(&c.name, 60))
+        .map(|c| (c.id, &c.name)).collect();
+    out.push_str(&format!("EmberlightDirectory = {{ format = 1, generated = {generated}, names = {{\n"));
+    for (id, name) in &characters {
+        out.push_str(&format!("[{id}] = {},\n", lua_string(name)));
+    }
+    out.push_str("}, recipes = {\n");
+    for r in directory.recipes.iter().take(20000) {
+        if !roster_text(&r.name, 100) || !roster_text(&r.skill, 24) { continue; }
+        let crafters: Vec<_> = r.crafters.iter().take(5000).filter(|id| characters.contains_key(*id)).map(i64::to_string).collect();
+        if crafters.is_empty() { continue; }
+        let aliases = r.other_names.iter().take(16).filter(|s| roster_text(s, 100)).cloned().collect::<Vec<_>>().join(" / ");
+        let mats = r.reagents.iter().take(32).filter(|m| roster_text(&m.name, 100) && (1..=100).contains(&m.count))
+            .map(|m| format!("{} × {}", m.count, m.name)).collect::<Vec<_>>().join(", ");
+        out.push_str(&format!("{{ name = {}, skill = {}, aliases = {}, materials = {}, crafters = {{ {} }} }},\n",
+            lua_string(&r.name), lua_string(&r.skill), lua_string(&aliases), lua_string(&mats), crafters.join(", ")));
+    }
+    out.push_str("} }\n");
+}
+
 /// Write `<addons>/Emberlight_Data/Crafting.lua`. Callers must first confirm the game is not running.
-pub fn write_crafting(addons: &Path, requests: Option<&CraftRequests>) -> Result<()> {
+pub fn write_crafting(addons: &Path, requests: Option<&CraftRequests>, directory: Option<&CraftDirectory>, generated: i64) -> Result<()> {
     let dir = addons.join(ADDON_DIR);
     fs::create_dir_all(&dir).with_context(|| format!("cannot create {}", dir.display()))?;
-    write_atomic(&dir.join(CRAFTING_FILE), render_crafting(requests).as_bytes())
+    let mut content = render_crafting(requests);
+    if let Some(directory) = directory {
+        render_directory(&mut content, directory, generated);
+    }
+    write_atomic(&dir.join(CRAFTING_FILE), content.as_bytes())
 }
 
 /// Write `<addons>/Emberlight_Data/Roster.lua`. Callers must first confirm the game is not running.
@@ -376,6 +402,7 @@ pub struct WriteReport {
     pub roster: Option<usize>,
     /// Why the roster check could not be downloaded (the one from the last sync stays).
     pub roster_problem: Option<String>,
+    pub crafting_problem: Option<String>,
 }
 
 /// Validate and install records into `<addons>/Emberlight_Data`. Callers must first confirm the
@@ -437,7 +464,7 @@ pub fn write_data_addon(addons: &Path, archive: &Archive) -> Result<WriteReport>
         write_atomic(&latest, render_latest(None, 0).as_bytes())?;
     }
     write_atomic(&dir.join(format!("{ADDON_DIR}.toc")), render_toc(&interface).as_bytes())?;
-    Ok(WriteReport { dir, written: out.notices.len(), rejected, roster: None, roster_problem: None })
+    Ok(WriteReport { dir, written: out.notices.len(), rejected, roster: None, roster_problem: None, crafting_problem: None })
 }
 
 #[cfg(test)]
@@ -478,6 +505,21 @@ mod tests {
         let archive = Archive { generated: 1, notices: vec![notice], replies: vec![with_line.clone(), without.clone()], removed: vec![] };
         let back = read_data(render_data(&archive).as_bytes()).unwrap();
         assert_eq!(back.replies, vec![with_line, without]);
+    }
+
+    #[test]
+    fn directory_keeps_visible_crafters_and_escapes_their_recipe_text() {
+        let directory: CraftDirectory = serde_json::from_str(r#"{
+            "characters":[{"id":2,"name":"Sam Smith","owner":"private metadata"}],
+            "recipes":[{"name":"Copper belt","skill":"Blacksmithing","otherNames":["Kupfer"],"crafters":[2,9],
+                        "reagents":[{"count":6,"name":"Copper Bar"}]},
+                       {"name":"Private recipe","skill":"Cooking","crafters":[9],"reagents":[]}]
+        }"#).unwrap();
+        let mut out = String::new();
+        render_directory(&mut out, &directory, 123);
+        assert!(lua::parse(out.as_bytes()).unwrap().contains_key("EmberlightDirectory"));
+        assert!(out.contains("6 × Copper Bar") && out.contains("Kupfer") && out.contains("crafters = { 2 }"));
+        assert!(!out.contains("Private recipe") && !out.contains("private metadata"));
     }
 
     #[test]

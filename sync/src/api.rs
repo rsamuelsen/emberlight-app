@@ -143,6 +143,37 @@ pub struct CraftRequest {
     pub created_at: i64,
 }
 
+/// Member-visible recipe data from the same directory as the website. Ignore profile
+/// metadata when deserializing. Only recipe information and character names go to WoW.
+#[derive(Debug, Deserialize)]
+pub struct CraftDirectory {
+    pub characters: Vec<DirectoryCharacter>,
+    pub recipes: Vec<DirectoryRecipe>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DirectoryCharacter {
+    pub id: i64,
+    pub name: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirectoryRecipe {
+    pub skill: String,
+    pub name: String,
+    #[serde(default)]
+    pub other_names: Vec<String>,
+    pub crafters: Vec<i64>,
+    pub reagents: Vec<DirectoryReagent>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DirectoryReagent {
+    pub name: String,
+    pub count: i64,
+}
+
 /// `GET /v1/officer/roster-check`: the website's member list for the addon's in-game roster check.
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -505,6 +536,10 @@ impl Client {
             bail!("the server refused the request ({})", res.status());
         }
         Ok(Some(res.json().context("the server sent an unexpected reply")?))
+    }
+
+    pub fn craft_directory(&self) -> Result<CraftDirectory> {
+        self.send(self.http.get(self.url("/v1/professions")))
     }
 
     pub fn download(&self) -> Result<Download> {

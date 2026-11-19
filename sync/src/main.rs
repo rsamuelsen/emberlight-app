@@ -111,6 +111,7 @@ fn report_write(report: &datafile::WriteReport) {
     if let Some(n) = report.roster {
         println!("Wrote the roster check ({n} member(s)).");
     }
+    if let Some(problem) = &report.crafting_problem { eprintln!("{problem}"); }
     if let Some(problem) = &report.roster_problem {
         eprintln!("The roster check was not updated: {problem}");
     }

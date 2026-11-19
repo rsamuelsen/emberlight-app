@@ -26,6 +26,14 @@ function U.Surface(parent, file)
     return texture
 end
 
+-- Inlays sit on the parent's background layer, beneath its labels and controls.
+function U.Inlay(parent, x, y, width, height, color)
+    local fill = parent:CreateTexture(nil, "BACKGROUND")
+    fill:SetPoint("TOPLEFT", x, y); fill:SetSize(width, height)
+    fill:SetColorTexture(unpack(color))
+    return fill
+end
+
 -- A notice's author as members read it: the name without its realm, which on WoW: Forever is a
 -- hidden part of the megarealm (a member's own notices, and the server's copies, carry it).
 function U.Author(value, limit) return (E.Clean(value, 120):match("^[^-]*")):sub(1, limit) end
@@ -113,28 +121,32 @@ end
 local C = U.colors
 local clear = { 0, 0, 0, 0 }
 local looks = {
+    header = { bg = clear, hover = {1,1,1,.08}, border = clear, text = C.text, selectedText = C.goldHi },
+    brass = { bg = {.11,.17,.21,1}, hover = {.18,.27,.32,1}, border = C.gold, text = C.goldHi },
     seal = { bg = C.wax, hover = C.waxHi, border = { .31, .09, .07, 1 }, text = C.ivory },
-    ink = { bg = clear, hover = { .114, .102, .082, .1 }, border = { .114, .102, .082, .75 }, text = C.ink, selectedBg = { .114, .102, .082, .16 } },
-    flat = { bg = clear, hover = { .114, .102, .082, .1 }, border = { .114, .102, .082, .7 }, text = C.ink, selectedBg = { .114, .102, .082, .88 }, selectedText = C.ivory },
+    ink = { bg = {.13,.21,.25,1}, hover = {.21,.32,.36,1}, border = {.49,.49,.38,1}, text = C.ivory, selectedBg = {.15,.34,.34,1} },
+    flat = { bg = {.09,.16,.20,1}, hover = {.17,.27,.31,1}, border = {.32,.40,.40,1}, text = C.text,
+        selectedBg = {.26,.17,.075,1}, selectedText = C.goldHi },
     bare = { bg = clear, hover = { .114, .102, .082, .12 }, border = clear, text = C.ink },
     nav = { bg = clear, hover = { 1, 1, 1, .05 }, border = clear, text = C.muted, selectedText = C.ink },
     row = { bg = clear, hover = { .114, .102, .082, .07 }, border = clear, text = C.ink, selectedBg = { .361, .325, .271, .16 } },
 }
--- "seal" and "ink" are painted plates: a wax-red one rimmed in pewter, and a slip of parchment
--- with an ink border. Each is drawn in three pieces so its shaped ends keep their proportions.
--- "flat", the small choice, is a square slip of the same parchment; its ends are narrower.
-local plates = { seal = { "ButtonSeal.tga", .1, .6 }, ink = { "ButtonInk.tga", .1, .6 }, flat = { "ButtonSmall.tga", .2, .2 } }
+-- Paint the two ends independently so the filigree keeps its shape on short controls.
+local plates = { seal = "PlateRed.tga", brass = "PlateBlue.tga", flat = "PlateBlue.tga", ink = "PlateBlue.tga" }
 local function plate(b)
     local art = plates[b.variant]
+    if art and b.selected then art = "PlateGold.tga" end
     for i, texture in ipairs(b.skin) do
         texture:SetShown(art ~= nil)
         if art then
-            texture:SetTexture(media .. art[1])
-            texture:SetTexCoord(i == 1 and 0 or i == 2 and art[2] or 1 - art[2], i == 1 and art[2] or i == 2 and 1 - art[2] or 1, 0, 1)
+            texture:SetTexture(media .. art)
+            local left = i == 1 and 0 or i == 2 and .10 or .90
+            local right = i == 1 and .10 or i == 2 and .90 or 1
+            texture:SetTexCoord(left, right, 0, 1)
         end
     end
     if art then
-        local cap = b:GetHeight() * art[3]
+        local cap = math.min(b:GetHeight() * .33, b:GetWidth() * .25)
         b.skin[1]:SetWidth(cap); b.skin[3]:SetWidth(cap)
         b.skin[2]:ClearAllPoints(); b.skin[2]:SetPoint("TOPLEFT", cap, 0); b.skin[2]:SetPoint("BOTTOMRIGHT", -cap, 0)
     end
@@ -143,8 +155,7 @@ end
 function U.ButtonState(b)
     local look = looks[b.variant] or looks.ink
     if plate(b) then
-        -- The chosen one of a set of small choices is inked in dark; other plates only dim.
-        local shade = b.pressed and .72 or b.selected and (look.selectedText and .4 or .74) or b.hover and 1 or .92
+        local shade = b.pressed and .67 or b.hover and 1 or b.selected and .78 or .89
         for _, texture in ipairs(b.skin) do texture:SetVertexColor(shade, shade, shade) end
         b:SetBackdropColor(0, 0, 0, 0); b:SetBackdropBorderColor(0, 0, 0, 0)
         b.label:SetTextColor(unpack(b.selected and look.selectedText or look.text))
@@ -157,7 +168,7 @@ function U.ButtonState(b)
     b:SetBackdropBorderColor(unpack(look.border))
     b.label:SetTextColor(unpack(b.selected and look.selectedText or look.text))
     if b.mark then b.mark:SetShown(b.selected or false) end
-    if b.badge then
+    if b.badge and b.variant == "nav" then
         -- On the bookmark the count is written in ink, clear of the ribbon's notched end.
         b.badge:SetTextColor(unpack(b.selected and C.ink or C.goldHi))
         b.badge:ClearAllPoints(); b.badge:SetPoint("RIGHT", b.selected and -36 or -12, 0)
@@ -187,7 +198,11 @@ function U.Button(parent, text, width, click, variant)
 
     b.label = U.Text(b, text, variant == "nav" and 17 or 15)
     b.label:SetJustifyV("MIDDLE")
-    if variant == "nav" then
+    if variant == "header" then
+        b.label:SetPoint("CENTER"); b.label:SetJustifyH("CENTER")
+        b.mark = U.Rule(b, 2, -30, width - 4, C.goldHi)
+        b.mark:SetHeight(2)
+    elseif variant == "nav" then
         b.label:SetPoint("LEFT", 30, 0)
         -- A gold cloth bookmark lies under the place the member is in.
         b.mark = b:CreateTexture(nil, "BACKGROUND")
@@ -291,14 +306,14 @@ function U.ScrollText(parent, width, height, color)
     return scroll
 end
 -- A setting chosen with two buttons: a caption, then less, the current value, more.
-function U.Stepper(parent, label, x, y, width, step, size)
+function U.Stepper(parent, label, x, y, width, step, size, dark)
     size = size or 32
-    local caption = U.Text(parent, label, 14, U.colors.paperMuted)
+    local caption = U.Text(parent, label, 14, dark and C.muted or C.paperMuted)
     caption:SetPoint("TOPLEFT", x, y)
     local s = {}
     s.less = U.Button(parent, "-", size, function() step(-1) end, "flat")
     s.less:SetPoint("TOPLEFT", x, y - 20)
-    s.value = U.FitText(U.Text(parent, "", 16, U.colors.ink), width - 2 * size - 8, 20, false)
+    s.value = U.FitText(U.Text(parent, "", 16, dark and C.ivory or C.ink), width - 2 * size - 8, 20, false)
     s.value:SetPoint("TOPLEFT", x + size + 4, y - 26)
     s.value:SetJustifyH("CENTER")
     s.more = U.Button(parent, "+", size, function() step(1) end, "flat")
@@ -321,4 +336,73 @@ function U.Until(timestamp)
     if seconds < 3600 then return "in " .. math.max(1, math.floor(seconds / 60)) .. " min" end
     if seconds < 172800 then local h = math.floor(seconds / 3600); return "in " .. h .. (h == 1 and " hour" or " hours") end
     return "in " .. math.floor(seconds / 86400) .. " days"
+end
+-- A month on the realm clock. Both picking a start and browsing the schedule use
+-- the same 42 cells and the same day limits. Day offsets are relative to today.
+function U.MonthCalendar(parent, x, y, choose)
+    local calendar = U.Paper(parent, 410, 346)
+    calendar:SetPoint("TOPLEFT", x, y)
+    calendar:SetFrameLevel(parent:GetFrameLevel() + 30)
+    calendar:EnableMouse(true)
+    local function label(text, left, top, width)
+        local t = U.FitText(U.Text(calendar, text, 14, U.colors.brown), width, 19, false)
+        t:SetPoint("TOPLEFT", left, top)
+        return t
+    end
+    local function firstDay(today, offset)
+        return offset - math.max(1, E.Client.MonthDay(today + offset * 86400 + 43200)) + 1
+    end
+    local function turn(delta)
+        local edge = calendar.first + (delta < 0 and -1 or 31)
+        calendar.first = firstDay(E.Client.DayStart(), edge)
+        calendar:Paint()
+    end
+    calendar.month = label("", 16, -14, 235)
+    calendar.back = U.Button(calendar, "<", 34, function() turn(-1) end, "flat")
+    calendar.back:SetPoint("TOPLEFT", 272, -7)
+    calendar.next = U.Button(calendar, ">", 34, function() turn(1) end, "flat")
+    calendar.next:SetPoint("TOPLEFT", 311, -7)
+    local close = U.Button(calendar, "X", 34, function() calendar:Hide() end, "flat")
+    close:SetPoint("TOPLEFT", 358, -7)
+    for i, day in ipairs({"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}) do
+        label(day, 15 + (i-1)*55, -51, 50):SetJustifyH("CENTER")
+    end
+    calendar.cells = {}
+    for i = 1, 42 do
+        local cell = U.Button(calendar, "", 51, function(self)
+            if self.days ~= nil then calendar:Hide(); choose(self.days) end
+        end, "flat")
+        cell:SetPoint("TOPLEFT", 15 + ((i-1)%7)*55, -75 - math.floor((i-1)/7)*43)
+        cell:SetHeight(38)
+        calendar.cells[i] = cell
+    end
+    function calendar:Paint()
+        local today = E.Client.DayStart()
+        local noon = today + self.first*86400 + 43200
+        local month = E.Client.MonthYear(noon)
+        self.month:SetText(month)
+        self.back:SetEnabled(self.first > 0)
+        self.next:SetEnabled(firstDay(today, self.first + 31) <= self.limit)
+        local lead = E.Client.Weekday(noon)
+        for i, cell in ipairs(self.cells) do
+            local day = self.first + i - 1 - lead
+            local t = today + day*86400
+            local available = day >= 0 and day <= self.limit and E.Client.MonthYear(t + 43200) == month
+            cell.days = available and day or nil
+            cell:SetShown(available)
+            if available then
+                local count = self.counts and self.counts[day] or 0
+                cell.label:SetText(E.Client.MonthDay(t + 43200) .. (count > 0 and "*" or ""))
+                U.SelectButton(cell, day == self.chosen)
+            end
+        end
+    end
+    function calendar:Open(day, limit)
+        self.chosen = math.max(0, math.min(day, limit))
+        self.first = firstDay(E.Client.DayStart(), self.chosen)
+        self.limit, self.counts = limit, nil
+        self:Paint(); self:Show()
+    end
+    calendar:Hide()
+    return calendar
 end

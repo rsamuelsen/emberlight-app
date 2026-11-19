@@ -173,6 +173,7 @@ pub fn pull(client: &Client, addons: &Path, still_closed: impl FnOnce() -> Resul
     let roster = client.roster_check();
     // Crafting requests for the game (addon 0.8.13). Optional: a failure leaves the last file.
     let crafting = client.craft_requests();
+    let directory = if matches!(&crafting, Ok(Some(_))) { Some(client.craft_directory()) } else { None };
     still_closed()?;
     let mut report = datafile::write_data_addon(addons, &Archive { generated: download.generated, notices: download.notices, replies: download.replies, removed: download.removed })?;
     match roster {
@@ -182,8 +183,18 @@ pub fn pull(client: &Client, addons: &Path, still_closed: impl FnOnce() -> Resul
         }
         Err(e) => report.roster_problem = Some(format!("{e:#}")),
     }
-    if let Ok(crafting) = crafting {
-        datafile::write_crafting(addons, crafting.as_ref())?;
+    match crafting {
+        Ok(crafting) => {
+            let directory = match directory.transpose() {
+                Ok(data) => data,
+                Err(e) => {
+                    report.crafting_problem = Some(format!("Could not download the crafter directory: {e:#}"));
+                    None
+                }
+            };
+            datafile::write_crafting(addons, crafting.as_ref(), directory.as_ref(), download.generated)?;
+        }
+        Err(e) => report.crafting_problem = Some(format!("Could not update crafting data: {e:#}")),
     }
     Ok(report)
 }

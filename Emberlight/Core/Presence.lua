@@ -111,15 +111,15 @@ end
 -- What the officers' list shows for one guildmate: their version, or nil when not heard.
 function P.VersionOf(identity) local h = P.heard[identity]; return h and h.version end
 
--- Sending a grand message (officers only; the receivers check again).
+-- Sending an announcement (officers only; the receivers check again).
 function P.SendGrand(text, now)
     now = now or E.Client.Now()
     local scope, roster, me = E.Sync.Context()
-    if not scope or not roster[me] or not roster[me].officer then return nil, "Only the guild master, Flame Keepers and Officer Alts can send a grand message." end
+    if not scope or not roster[me] or not roster[me].officer then return nil, "Only the guild master, Flame Keepers and Officer Alts can send an announcement." end
     text = E.Trim(E.Clean(text, P.grandLimit))
     if text == "" then return nil, "Write the message first." end
     if P.lastGrand and now - P.lastGrand < P.grandEvery then
-        return nil, "Wait " .. (P.grandEvery - (now - P.lastGrand)) .. " seconds before sending another grand message."
+        return nil, "Wait " .. (P.grandEvery - (now - P.lastGrand)) .. " seconds before sending another announcement."
     end
     local id = tostring(now)
     local ok, problem = E.Sync.Queue({ "B", E.Sync.guild, id, text }, "B:" .. id)
@@ -167,7 +167,7 @@ function P.FromCompanion()
     return true
 end
 
--- For officers on Home: how many guildmates online answered with a version, of how many online.
+-- For the officer desk: how many guildmates online answered with a version, of how many online.
 function P.Usage()
     if not IsInGuild or not IsInGuild() or not GetNumGuildMembers or not GetGuildRosterInfo then return nil end
     local online, using = 0, 0
@@ -194,7 +194,7 @@ function P.TestUpdate()
     end
 end
 function P.TestGrand()
-    P.Show("This is how a grand message looks. Only you see this test.", E.Client.Name(), false)
+    P.Show("This is how an announcement looks. Only you see this test.", E.Client.Name(), false)
 end
 
 function P.Start()

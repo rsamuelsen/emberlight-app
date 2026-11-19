@@ -1,4 +1,4 @@
-import { CATEGORIES, type Notice } from "./api";
+import { kindName, type Notice } from "./api";
 import { fmtDateNumber, serverDayKey, serverWhen, isGoing, adventureWhen, countdown, daysUntil, displayName, fmtDayMonth, fmtMonth, fmtWeekdayLong } from "./events";
 
 import { Arrow, EmptyState } from "./UI";
@@ -25,10 +25,11 @@ function dayLabel(start: number, now: number) {
 function Row({ n, now, onRead }: { n: Notice; now: number; onRead: () => void }) {
   const adventure = n.category !== 4;
   return (
-    <button className={`agenda-row${n.cancelled ? " is-withdrawn" : ""}`} onClick={onRead}>
+    <button className={`agenda-row${n.cancelled ? " is-withdrawn" : ""}${n.story ? " is-story" : ""}`} onClick={onRead}>
       <span className="agenda-time">{serverWhen(n.start)}</span>
       <span className="agenda-main">
-        {adventure && <span className="agenda-kind">{CATEGORIES[n.category]}</span>}
+        {/* Every member's event is an Adventure; a guild event says which of the two kinds it is. */}
+        {!adventure && <span className={`agenda-kind${n.story ? " story-ribbon" : ""}`}>{kindName(n)}</span>}
         <span className="agenda-title">{n.title}</span>{isGoing(n) && <span className="going-mark">You’re going</span>}
         {n.location && <span className="agenda-where">{n.location}</span>}
         <span className="agenda-body">{n.body}</span>

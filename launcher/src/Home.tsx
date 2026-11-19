@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { CATEGORIES, type Announcement, type Notice } from "./api";
+import { type Announcement, type Notice } from "./api";
 import type { EventsView } from "./Agenda";
 import { NewsList } from "./Announcements";
 import { fmtDateNumber, serverWhen, isGoing, adventureWhen, countdown, displayName, fmtMonth, fmtWeekday, Seal } from "./events";
@@ -39,14 +39,14 @@ function ListRow({ n, meta, onRead }: { n: Notice; meta: ReactNode; onRead: () =
 
 function Featured({ n, now, onRead }: { n: Notice; now: number; onRead: () => void }) {
   return (
-    <button className="featured" onClick={onRead}>
+    <button className={`featured${n.story ? " is-story" : ""}`} onClick={onRead}>
       <span className="featured-date" aria-hidden="true">
         <span>{fmtMonth.format(n.start * 1000)}</span>
         <strong>{fmtDateNumber.format(n.start * 1000)}</strong>
         <span>{fmtWeekday.format(n.start * 1000)}</span>
       </span>
       <span className="featured-content">
-        <span className="featured-label">Next guild event</span>
+        <span className={`featured-label${n.story ? " story-ribbon" : ""}`}>{n.story ? "Next guild event: Story Event" : "Next guild event"}</span>
         <span className="featured-title">{n.title}</span>{isGoing(n) && <span className="going-mark">You’re going</span>}
         <span className="featured-when">{serverWhen(n.start, true)}</span>
         {n.location && <span className="featured-location">{n.location}</span>}
@@ -93,7 +93,7 @@ export function Home({ events, adventures, now, signedIn, announcements, newsPro
           <section className="home-col" aria-label="Adventures">
             <header className="section-head"><h2>Adventures</h2>{adventures.length > 0 && <button className="link" onClick={() => onEvents("adventures")}>View all <Arrow /></button>}</header>
             {adventures.length === 0 ? <EmptyState title={signedIn ? "No adventures posted here yet." : "Sign in to see members’ adventures."} /> : (
-              <ol className="upcoming">{adventures.slice(0, 3).map((n) => <ListRow key={`${n.scope}/${n.id}`} n={n} onRead={() => onRead(n)} meta={<>{CATEGORIES[n.category]} · {n.start <= now ? <em className="is-now">{adventureWhen(n, now)}</em> : serverWhen(n.start)} · {displayName(n.author)}</>} />)}</ol>
+              <ol className="upcoming">{adventures.slice(0, 3).map((n) => <ListRow key={`${n.scope}/${n.id}`} n={n} onRead={() => onRead(n)} meta={<>{n.start <= now ? <em className="is-now">{adventureWhen(n, now)}</em> : serverWhen(n.start)} · {displayName(n.author)}</>} />)}</ol>
             )}
           </section>
         </div>

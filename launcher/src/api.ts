@@ -16,6 +16,8 @@ export interface Notice {
   body: string;
   ownReplies?: { response: string }[];
   authorName?: string | null;
+  /** A Story Event: an official event (category 4) the server marks as one (19 November 2026). */
+  story?: boolean;
 }
 
 export interface Settings {
@@ -126,6 +128,8 @@ export interface GuildEvent {
   authorName: string | null;
   /** The signed-in member's own answers (empty on older servers). */
   ownReplies?: { response: string }[];
+  /** A Story Event (false or missing on older servers). */
+  story?: boolean;
 }
 
 const KIND_CATEGORY: Record<GuildEvent["kind"], number> = { expedition: 1, help: 2, rp: 3, official: 4 };
@@ -147,6 +151,7 @@ export const eventAsNotice = (e: GuildEvent): Notice => ({
   body: e.body,
   ownReplies: e.ownReplies,
   authorName: e.authorName,
+  story: e.kind === "official" && e.story === true,
 });
 
 export interface CharactersView {
@@ -205,8 +210,13 @@ export function openInBrowser(url: string) {
   else window.open(url, "_blank", "noopener");
 }
 
-// The words the addon shows since 0.7 (Emberlight/Core/Bootstrap.lua); only the number travels.
-export const CATEGORIES = ["", "Journey", "Call for aid", "Gathering", "Guild event"];
+// The words the addon shows (Emberlight/Core/Bootstrap.lua); only the number travels. Since
+// 19 November 2026 there are three kinds of event: a Story Event and a Guild Gathering (both
+// official, category 4) and an Adventure (what members post; 1 to 3 were Journey, Call for aid and
+// Gathering, and all are Adventures now).
+export const CATEGORIES = ["", "Adventure", "Adventure", "Adventure", "Guild Gathering"];
+/** What an event is called: "Story Event", "Guild Gathering" or "Adventure". */
+export const kindName = (n: Pick<Notice, "category" | "story">) => n.category === 4 ? (n.story ? "Story Event" : "Guild Gathering") : "Adventure";
 
 export const FLAVOR_NAMES: Record<string, string> = {
   _retail_: "Retail",

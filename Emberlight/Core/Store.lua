@@ -71,7 +71,9 @@ function S.CleanDraft(draft)
     for _, key in ipairs({ "title", "location", "recipient", "body" }) do
         d[key] = E.Clean(draft[key], key == "body" and 1600 or 100)
     end
-    d.category = E.categories[draft.category] and draft.category or 1
+    -- An official event (4) or an Adventure (1). Journeys, Calls for aid and Gatherings from before
+    -- 0.9.3 (2 and 3) are all Adventures now.
+    d.category = draft.category == 4 and 4 or 1
     d.route = E.routes[draft.route] and draft.route or 1
     -- How long the notice stays on the board: an hour up to a week.
     local stays = { [1] = true, [2] = true, [4] = true, [12] = true, [24] = true, [72] = true, [168] = true }
@@ -79,7 +81,7 @@ function S.CleanDraft(draft)
     -- "Keep the place secret": the meeting place is left empty and shown as not told.
     d.secret = draft.secret == true
     if d.secret then d.location = "" end
-    d.startDays = math.max(0, math.min(E.maxHorizonDays, math.floor(tonumber(draft.startDays) or 0)))
+    d.startDays = math.max(0, math.min(E.AheadDays(d.category), math.floor(tonumber(draft.startDays) or 0)))
     d.startHour = math.max(0, math.min(23, math.floor(tonumber(draft.startHour) or 20)))
     d.startMinute = math.max(0, math.min(59, math.floor(tonumber(draft.startMinute) or 0)))
     d.updated = E.Client.Now()

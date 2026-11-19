@@ -168,15 +168,18 @@ pub struct Announcement {
     pub url: String,
 }
 
-/// An event as `GET /v1/events` shapes it for reading: open, not withdrawn, and already there while
-/// it is more than 21 days ahead (the game's sync download leaves those out).
+/// An event as `GET /v1/events` shapes it for reading: open and not withdrawn, however far ahead.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GuildEvent {
     pub scope: String,
     pub id: String,
-    /// `official`, or a member kind: `expedition`, `help` or `rp`.
+    /// `official`, or a member kind: `expedition`, `help` or `rp` (all three are Adventures now).
     pub kind: String,
+    /// A Story Event (an official event the server marks as one; 19 November 2026). False on
+    /// older servers.
+    #[serde(default)]
+    pub story: bool,
     pub title: String,
     #[serde(default)]
     pub location: Option<String>,

@@ -13,7 +13,7 @@ const official = fixtureNotices.find((n) => n.category === 4)!;
 const sample: Notice[] = [
   ...fixtureNotices,
   { ...official, id: "preview-2", title: "Officer meeting", location: "Stormwind Keep", body: "Planning the autumn season.", start: official.start + 86400 * 2 + 3600, expires: official.expires + 86400 * 3 },
-  { ...official, id: "preview-3", title: "Road to Darkshire", location: "Duskwood", body: "Escort for the new members. Bring torches.", start: official.start + 86400 * 5, expires: official.expires + 86400 * 6 },
+  { ...official, id: "preview-3", story: true, title: "Road to Darkshire", location: "Duskwood", body: "Escort for the new members. Bring torches.", start: official.start + 86400 * 5, expires: official.expires + 86400 * 6 },
   // Members' adventures: one under way, one tonight, one secret place.
   { ...official, id: "preview-4", category: 3, title: "Stories by the fire", location: "Lion's Pride Inn", body: "Come as you are.", start: now() - 1200, expires: now() + 2400 },
   { ...official, id: "preview-5", category: 1, title: "Into the Redridge hills", location: "Lakeshire", body: "A short ride east. Mounts ready by the bridge.", start: now() + 3 * 3600, expires: now() + 6 * 3600 },
@@ -237,7 +237,7 @@ export async function handle(cmd: string, args?: Record<string, unknown>): Promi
       return state.notices
         .filter((n) => (args?.kind === "official" ? n.category === 4 : n.category !== 4) && !n.cancelled)
         .sort((a, b) => a.start - b.start)
-        .map((n) => ({ scope: n.scope, id: n.id, kind: (["", "expedition", "help", "rp", "official"] as const)[n.category], title: n.title, location: n.location || null, body: n.body, start: n.start, expires: n.expires, author: n.author, authorName: n.author.split("-")[0], ownReplies: n.category === 4 && n.id === state.notices.find(n => n.category === 4)?.id ? [{ response: "I will join" }] : [] }));
+        .map((n) => ({ scope: n.scope, id: n.id, kind: (["", "expedition", "help", "rp", "official"] as const)[n.category], title: n.title, location: n.location || null, body: n.body, start: n.start, expires: n.expires, author: n.author, authorName: n.author.split("-")[0], story: n.story === true, ownReplies: n.category === 4 && n.id === state.notices.find(n => n.category === 4)?.id ? [{ response: "I will join" }] : [] }));
     case "open_link":
       return;
     case "characters":

@@ -13,6 +13,22 @@ local function safe(s, limit, required)
     return type(s) == "string" and #s <= limit and E.Clean(s, limit) == s and (not required or E.Trim(s) ~= "")
 end
 local HORIZON = E.maxHorizonDays * 86400
+-- How far ahead an event may start (0.9.3): every notice is taken up to AHEAD ahead, an Adventure
+-- only up to ADVENTURE_AHEAD. One day more than the days offered, for a start late on the last day.
+local AHEAD = (E.officialDays + 1) * 86400
+local ADVENTURE_AHEAD = (E.adventureDays + 1) * 86400
+-- The time a notice travels with (`created`): when it was posted, or for an event further ahead
+-- than HORIZON the earliest time that keeps its start and end within HORIZON of it. Every addon
+-- since the first checks a notice against HORIZON from this time and refuses one from the future,
+-- so an older addon takes a far-ahead event once it is near enough; this one takes it at once. The
+-- server hands out a website event with the same time (syncCreated in server/src/notice.ts).
+function N.Created(start, expires, now)
+    return math.max(now, start - HORIZON, expires - HORIZON - 14400)
+end
+-- Whether a notice starts no further ahead than its kind may (an Adventure 31 days).
+local function nearEnough(category, start, now)
+    return category == 4 or start <= now + ADVENTURE_AHEAD
+end
 -- How long a supply request lives in game: open ones are accepted this long after they were
 -- posted, and closed ones (with their pledges) are pruned after CLOSED_SUPPLY_DAYS.
 local SUPPLY_DAYS, CLOSED_SUPPLY_DAYS = 90, 30
@@ -168,18 +184,23 @@ function N.ImportNotice(scope, id, n, me, now)
     local owner = n.owner
     if type(owner) ~= "string" or #owner > 120 or #id > 150 or id:sub(1, #owner + 1) ~= owner .. ":" or not id:sub(#owner + 2):match("^%d+$") then return false end
     local rev = whole(n.revision, 1, 999999999999999)
-    local created = whole(n.created, 1, now + 60)
-    local expires = whole(n.expires, now + 1, now + HORIZON + 14460)
+    local created = whole(n.created, 1, now + AHEAD)
+    local expires = whole(n.expires, now + 1, now + AHEAD + HORIZON + 14460)
     local category = whole(n.category, 1, 4)
     if not rev or not created or not expires or not category or expires <= created or expires - created > HORIZON + 14400 + 120 then return false end
     local start = whole(n.start, created - 172800, created + HORIZON + 60)
-    if not start or type(n.cancelled) ~= "boolean" then return false end
+    if not start or type(n.cancelled) ~= "boolean" or not nearEnough(category, start, now) then return false end
     if not safe(n.title, 100, true) or not safe(n.location, 100) or not safe(n.body, 1600, true) or not safe(n.author, 120, true) then return false end
     -- The server's copy names the owner's true realm; this client may know them by another.
     owner = C.Local(owner)
     local old = scope.entries[id]
     if old and (old.owner ~= owner or old.created ~= created or old.expires ~= expires or old.categoryIndex ~= category or old.start ~= start) then return false end
-    if old and (old.revision >= rev or old.cancelled) then return false end
+    -- A Story Event (0.9.3): the server's mark on an official event. It is never taken away.
+    local story = category == 4 and n.story == true
+    if old and (old.revision >= rev or old.cancelled) then
+        if story and not old.story then old.story = true; return true end
+        return false
+    end
     if not old then
         local own = 0
         for _, v in pairs(scope.entries) do if v.owner == owner then own = own + 1 end end
@@ -189,6 +210,7 @@ function N.ImportNotice(scope, id, n, me, now)
     entry.id = id; entry.owner = owner; entry.author = n.author; entry.revision = rev; entry.created = created; entry.expires = expires
     entry.start = start; entry.categoryIndex = category; entry.category = E.categories[category]; entry.cancelled = n.cancelled
     entry.title = n.title; entry.location = n.location; entry.body = n.body; entry.own = owner == me; entry.live = true
+    if story then entry.story = true end
     scope.entries[id] = entry
     return true
 end
@@ -229,7 +251,7 @@ function N.Queue(fields, key)
     local wire = E.Protocol.Encode(fields)
     if not wire then return nil, "This notice is too large to share." end
     N.packetID = (N.packetID or 0) + 1
-    local official = (fields[1] == "N" and tonumber(fields[7]) == 4) or fields[1] == "S" or fields[1] == "B"
+    local official = (fields[1] == "N" and tonumber(fields[7]) == 4) or fields[1] == "S" or fields[1] == "B" or fields[1] == "T"
     N.queue[#N.queue+1] = { key=key, wire=wire, id=tostring(N.packetID), part=1, since=C.Now(), guild=N.guild, official=official }
     return true
 end
@@ -271,21 +293,23 @@ function N.Post(draft)
     if not N.Ready() or not data then return nil, "Turn sharing on in Settings, and be in the guild." end
     if draft.route ~= 1 then return nil, "Choose the noticeboard to post a notice." end
     local ok, problem = E.Store.Validate(draft); if not ok then return nil, problem end
-    if draft.category == 4 and not roster[me].officer then return nil, C.Channel()=="PARTY" and "Only the party leader can post official events." or "Official guild events require the guild leader, Flame Keeper or Officer Alt rank." end
+    if draft.category == 4 and not roster[me].officer then return nil, C.Channel()=="PARTY" and "Only the party leader can post official events." or "Guild Gatherings require the guild leader, Flame Keeper or Officer Alt rank." end
     N.List()
     local own = 0; for _, entry in pairs(data.entries) do if entry.owner == me then own = own + 1 end end
     if own >= 10 or count(data.entries) >= 200 then return nil, "The board is full. Wait for older notices to expire." end
     local d = E.Store.SaveDraft(draft)
     local start = N.StartTime(d.startDays, d.startHour, d.startMinute)
     local expires = start + d.hours * 3600
-    if expires <= C.Now() then return nil, "Choose a time that hasn't already passed." end
-    -- Every client refuses a notice that reaches further ahead than this, so say so here.
-    if start > C.Now() + HORIZON or expires > C.Now() + HORIZON + 14400 then
-        return nil, "That reaches too far ahead. A notice must start and leave the board within three weeks."
+    local now = C.Now()
+    if expires <= now then return nil, "Choose a time that hasn't already passed." end
+    -- Every client refuses a notice that starts further ahead than its kind may, so say so here.
+    if d.startDays > E.AheadDays(d.category) or start > now + (d.category == 4 and AHEAD or ADVENTURE_AHEAD) then
+        return nil, d.category == 4 and "That is too far ahead. A guild event can start up to two years from now."
+            or "That is too far ahead. An Adventure can start up to " .. E.adventureDays .. " days from now."
     end
     local revision = N.Revision()
     local entry = { id=me .. ":" .. string.format("%.0f",revision), owner=me, author=C.Author(roster, me),
-        revision=revision, created=C.Now(), expires=expires, start=start, title=d.title,
+        revision=revision, created=N.Created(start, expires, now), expires=expires, start=start, title=d.title,
         location=d.location, body=d.body, category=E.categories[d.category], categoryIndex=d.category, own=true, live=true }
     local queued, why = N.Queue(N.Fields(entry), "N:" .. entry.id .. ":" .. revision)
     if not queued then return nil, why end
@@ -507,6 +531,8 @@ function N.Snapshot()
     for _, entry in ipairs(N.List()) do
         -- No relaying somebody else's record: only the authenticated author resends it.
         if entry.owner == me then N.Queue(N.Fields(entry), "N:" .. entry.id .. ":" .. entry.revision) end
+        -- A Story Event's mark, after the notice itself: an addon before 0.9.3 ignores it.
+        if entry.owner == me and entry.story and entry.categoryIndex == 4 and not entry.cancelled then N.Queue({ "T", N.guild, entry.id }, "T:" .. entry.id) end
         local reply = (data.replies[entry.id] or {})[me]
         if reply and not entry.cancelled then N.Queue({"R",N.guild,entry.id,reply.revision,reply.response}, "R:" .. entry.id .. ":" .. reply.revision) end
         local line = (data.lines[entry.id] or {})[me]
@@ -554,12 +580,13 @@ function N.Apply(fields, sender)
         -- (and its edits and withdrawal, which keep the original created time) for its whole life.
         -- Created is bounded by the longest life a notice can have, and start by created, the same
         -- rules as the archive import and the server.
-        local created = integer(fields[5], C.Now()-HORIZON-14520, C.Now()+60)
-        local expires = integer(fields[6], C.Now()+1, C.Now()+HORIZON+14460)
+        -- Since 0.9.3 an event further ahead than HORIZON arrives with a later `created` (N.Created).
+        local created = integer(fields[5], C.Now()-HORIZON-14520, C.Now()+AHEAD)
+        local expires = integer(fields[6], C.Now()+1, C.Now()+AHEAD+HORIZON+14460)
         local category = integer(fields[7],1,4)
-        local start = integer(fields[12], C.Now()-HORIZON-14520-172800, C.Now()+HORIZON+60)
+        local start = integer(fields[12], C.Now()-HORIZON-14520-172800, C.Now()+AHEAD+HORIZON+60)
         if not rev or not created or not expires or expires <= created or expires-created > HORIZON+14400+120 or not category or not start then return false end
-        if start < created-172800 or start > created+HORIZON+60 then return false end
+        if start < created-172800 or start > created+HORIZON+60 or not nearEnough(category, start, C.Now()) then return false end
         if not N.Owns(sender, id) then return false end
         if fields[8] ~= "0" and fields[8] ~= "1" then return false end
         if not safe(fields[9],100,true) or not safe(fields[10],100) or not safe(fields[11],1600,true) then return false end
@@ -576,6 +603,13 @@ function N.Apply(fields, sender)
         entry.categoryIndex=category; entry.category=E.categories[category]; entry.cancelled=fields[8]=="1"
         entry.title=fields[9]; entry.location=fields[10]; entry.body=fields[11]; entry.own=sender==me; entry.live=true
         data.entries[id]=entry; return true
+    elseif kind == "T" and #fields == 3 then
+        -- A Story Event's mark (0.9.3), from the officer who posted the event: their own open
+        -- official event only, and only while they hold officer rank. It is never taken away.
+        local entry = data.entries[fields[3]]
+        if not entry or entry.owner ~= sender or not N.Owns(sender, entry.id) or entry.categoryIndex ~= 4 or entry.cancelled or entry.expires <= C.Now() then return false end
+        if not roster[sender].officer or entry.story then return false end
+        entry.story = true; return true
     elseif kind == "R" and #fields == 5 then
         local entry=data.entries[fields[3]]; local rev=integer(fields[4],1,999999999999999)
         if not entry or not rev or entry.owner == sender or entry.cancelled or entry.expires <= C.Now() then return false end

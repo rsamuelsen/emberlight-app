@@ -94,7 +94,7 @@ end
 function M.Receive(prefix, packet, channel, sender, now)
     if prefix ~= M.prefix or channel ~= "GUILD" or not M.Enabled() then return false end
     if issecretvalue and (issecretvalue(packet) or issecretvalue(sender)) then return false end
-    now = now or C.Now()
+    if type(now) ~= "number" then now = C.Now() end
     local who = C.Canonical(sender)
     if not who then return false end
     who = C.Local(who)
@@ -121,9 +121,9 @@ end
 function M.Prune(now)
     local gone = false
     for who, p in pairs(M.positions) do
-        if p.at < now - M.forget then M.positions[who] = nil; gone = true end
+        if type(p.at) ~= "number" or p.at < now - M.forget then M.positions[who] = nil; gone = true end
     end
-    for who, at in pairs(M.heardAt) do if at < now - M.forget then M.heardAt[who] = nil end end
+    for who, at in pairs(M.heardAt) do if type(at) ~= "number" or at < now - M.forget then M.heardAt[who] = nil end end
     if gone then M.Changed() end
 end
 
@@ -163,7 +163,9 @@ function M.Start()
     local frame = CreateFrame("Frame")
     M.frame = frame
     pcall(frame.RegisterEvent, frame, "CHAT_MSG_ADDON")
-    frame:SetScript("OnEvent", function(_, _, ...) pcall(M.Receive, ...) end)
+    -- Only the first four values: the game's fifth (the target) is not a time (0.9.1 fix: passing
+    -- it on as `now` stored text as a time and stopped the map for everyone after one message).
+    frame:SetScript("OnEvent", function(_, _, prefix, packet, channel, sender) pcall(M.Receive, prefix, packet, channel, sender) end)
     if C_Timer and C_Timer.NewTicker then M.timer = C_Timer.NewTicker(2, function() pcall(M.Tick) end) end
     M.TellOnce()
 end

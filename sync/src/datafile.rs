@@ -105,6 +105,10 @@ pub fn render_data(archive: &Archive) -> String {
             for (k, v) in fields {
                 s.push_str(&format!("\t\t\t\t\t{k} = {v},\n"));
             }
+            // A Story Event (addon 0.9.3); an older addon ignores the extra field.
+            if n.story && n.category == 4 {
+                s.push_str("\t\t\t\t\tstory = true,\n");
+            }
             s.push_str("\t\t\t\t},\n");
         }
         s.push_str("\t\t\t},\n");
@@ -270,6 +274,7 @@ pub fn read_data(src: &[u8]) -> Result<Archive> {
                 title: s("title")?,
                 location: s("location")?,
                 body: s("body")?,
+                story: field(t, "story").and_then(Value::as_bool).unwrap_or(false),
             });
         }
         let reply_table = scope.as_table().and_then(|s| field(s, "replies")).and_then(Value::as_table);
@@ -440,11 +445,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn story_events_are_marked_in_the_data_file() {
+        let story = crate::records::Notice {
+            scope: "3:123".into(), id: "alice-testrealm:1800000000000".into(), owner: "alice-testrealm".into(), author: "Alice-TestRealm".into(),
+            revision: 1, created: 1_800_000_000, expires: 1_800_007_200, start: 1_800_000_000, category: 4, cancelled: false,
+            title: "Title".into(), location: String::new(), body: "Body".into(), story: true,
+        };
+        let gathering = crate::records::Notice { id: "alice-testrealm:1800000000001".into(), story: false, ..story.clone() };
+        let archive = Archive { generated: 1, notices: vec![story.clone(), gathering.clone()], replies: vec![], removed: vec![] };
+        let text = render_data(&archive);
+        assert_eq!(text.matches("story = true").count(), 1);
+        let back = read_data(text.as_bytes()).unwrap();
+        assert_eq!(back.notices, vec![story, gathering]);
+        // The server's download names it; an upload never carries it.
+        let parsed: crate::records::Notice = serde_json::from_str(r#"{"scope":"3:123","id":"a-b:1","owner":"a-b","author":"A-B","revision":1,"created":1,"expires":2,"start":1,"category":4,"cancelled":false,"title":"t","location":"","body":"b","story":true}"#).unwrap();
+        assert!(parsed.story);
+        assert!(!serde_json::to_string(&crate::records::Notice { story: false, ..parsed }).unwrap().contains("story"));
+    }
+
+    #[test]
     fn reply_lines_round_trip_through_the_data_file() {
         let notice = crate::records::Notice {
             scope: "3:123".into(), id: "alice-testrealm:1800000000000".into(), owner: "alice-testrealm".into(), author: "Alice-TestRealm".into(),
             revision: 1, created: 1_800_000_000, expires: 1_800_007_200, start: 1_800_000_000, category: 1, cancelled: false,
-            title: "Title".into(), location: String::new(), body: "Body".into(),
+            title: "Title".into(), location: String::new(), body: "Body".into(), story: false,
         };
         let with_line = Reply {
             scope: "3:123".into(), notice_id: notice.id.clone(), respondent: "bob-testrealm".into(), revision: 5,

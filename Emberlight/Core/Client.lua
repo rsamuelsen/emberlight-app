@@ -56,5 +56,6 @@ function E.Client.Clock(timestamp) return date("!%H:%M", timestamp + E.Client.Re
 function E.Client.Weekday(timestamp) return ((tonumber(date("!%w", timestamp + E.Client.RealmOffset())) or 0) + 6) % 7 end
 function E.Client.MonthDay(timestamp) return tonumber(date("!%d", timestamp + E.Client.RealmOffset())) or 0 end
 function E.Client.Month(timestamp) return date("!%B", timestamp + E.Client.RealmOffset()) end
+function E.Client.MonthYear(timestamp) return date("!%B %Y", timestamp + E.Client.RealmOffset()) end
 -- The same moment on the member's own computer clock.
 function E.Client.LocalClock(timestamp) return date("%H:%M", timestamp) end

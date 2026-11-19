@@ -30,6 +30,11 @@ pub struct Notice {
     pub title: String,
     pub location: String,
     pub body: String,
+    /// A Story Event (19 November 2026): an official event (category 4) the server marks as one.
+    /// Only the server's download carries it; it is written to `Emberlight_Data` for the addon and
+    /// never uploaded (the game's own records do not say it).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub story: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -601,6 +606,7 @@ fn notice_from(scope: &str, id: &str, t: &Table) -> Result<Notice, String> {
         title: get_str(t, "title", false)?,
         location: get_str(t, "location", true)?,
         body: get_str(t, "body", false)?,
+        story: false,
     };
     if get_str(t, "id", false)? != id {
         return Err("stored id does not match its key".into());
@@ -896,6 +902,7 @@ mod tests {
             title: "Title".into(),
             location: String::new(),
             body: "Body".into(),
+            story: false,
         }
     }
 

@@ -5,6 +5,13 @@ local media = "Interface\\AddOns\\Emberlight\\Media\\"
 -- class, on the world map and on the minimap. Hovering one tells its name, level, class and
 -- where, as the game does for party members. Party and raid members are left out: the game
 -- already shows them.
+--
+-- Other map addons (0.9.2, the owner's request, 19 November 2026): when the shared HereBeDragons
+-- library is loaded (Libs/, and carried by many map addons too), it places the flames, as it does
+-- for Questie, TomTom, HandyNotes and GatherMate. Its pins follow the world map's own pin system
+-- and the minimap's real shape, size and zoom, so the flames appear on OpenMap's stitched map,
+-- on square and resized minimaps (ElvUI, SexyMap, Leatrix Plus...) and on moved or resized world
+-- maps. Without the library the flames are placed by hand, on the game's own maps only.
 U.mapPins = U.mapPins or { world = {}, mini = {} }
 local pins = U.mapPins
 -- How wide the minimap is, in yards, at each zoom (outdoors, indoors), as the game draws it.
@@ -192,7 +199,73 @@ function U.RefreshMinimapPins()
     pins.miniUsed = used
 end
 
+-- The shared library, or nil when it is not loaded.
+local REF = "Emberlight"
+function U.MapLibrary()
+    local stub = _G.LibStub
+    if type(stub) ~= "table" or not stub.GetLibrary then return nil end
+    local ok, lib = pcall(stub.GetLibrary, stub, "HereBeDragons-Pins-2.0", true)
+    if ok and type(lib) == "table" and lib.AddWorldMapIconMap and lib.AddMinimapIconMap and lib.RemoveWorldMapIcon and lib.RemoveMinimapIcon then return lib end
+    return nil
+end
+
+-- One world flame and one minimap flame per guildmate shown, given to the library only when
+-- they move; it keeps them in place while the maps pan, zoom and turn.
+pins.shared = pins.shared or {}
+pins.spare = pins.spare or {}
+local function release(lib, s)
+    pcall(lib.RemoveWorldMapIcon, lib, REF, s.world)
+    pcall(lib.RemoveMinimapIcon, lib, REF, s.mini)
+    s.world:Hide(); s.mini:Hide()
+    s.map, s.x, s.y = nil, nil, nil
+end
+function U.RefreshSharedPins(lib)
+    local seen, used = {}, 0
+    if M.Enabled() then
+        each(function(who, p, info)
+            local s = pins.shared[who]
+            if not s then
+                s = table.remove(pins.spare)
+                if not s then
+                    s = { world = pin({}, 1, UIParent, 16), mini = pin({}, 1, Minimap or UIParent, 14) }
+                    s.world:Hide(); s.mini:Hide()
+                end
+                pins.shared[who] = s
+            end
+            s.world.who, s.mini.who = who, who
+            if s.map ~= p.map or s.x ~= p.x or s.y ~= p.y then
+                -- The library adds a second world flame rather than moving the first.
+                release(lib, s)
+                s.map, s.x, s.y = p.map, p.x, p.y
+                pcall(lib.AddWorldMapIconMap, lib, REF, s.world, p.map, p.x, p.y, HBD_PINS_WORLDMAP_SHOW_WORLD or 3)
+                pcall(lib.AddMinimapIconMap, lib, REF, s.mini, p.map, p.x, p.y, true, false)
+                if Minimap and s.mini.SetFrameLevel then s.mini:SetFrameLevel(Minimap:GetFrameLevel() + 5) end
+            end
+            look(s.world, info); look(s.mini, info)
+            seen[who] = true
+            used = used + 1
+        end)
+    end
+    for who, s in pairs(pins.shared) do
+        if not seen[who] then
+            release(lib, s)
+            pins.shared[who] = nil
+            pins.spare[#pins.spare + 1] = s
+        end
+    end
+    pins.sharedUsed = used
+end
+
 function U.RefreshMapPins()
+    local lib = U.MapLibrary()
+    if lib then
+        -- Flames placed by hand earlier are put away; the library's take over.
+        for i = 1, #pins.world do pins.world[i]:Hide() end
+        for i = 1, #pins.mini do pins.mini[i]:Hide() end
+        pins.worldUsed, pins.miniUsed = 0, 0
+        pcall(U.RefreshSharedPins, lib)
+        return
+    end
     pcall(U.RefreshWorldPins)
     pcall(U.RefreshMinimapPins)
 end
@@ -208,7 +281,7 @@ function U.StartMapPins()
         since = since + elapsed
         if since < .2 then return end
         since = 0
-        if not next(M.positions) and (pins.worldUsed or 0) == 0 and (pins.miniUsed or 0) == 0 then return end
+        if not next(M.positions) and (pins.worldUsed or 0) == 0 and (pins.miniUsed or 0) == 0 and (pins.sharedUsed or 0) == 0 then return end
         U.RefreshMapPins()
     end)
 end

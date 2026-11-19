@@ -36,7 +36,7 @@ export function officialEvents(notices: Notice[]) {
     .sort((a, b) => Number(a.cancelled) - Number(b.cancelled) || a.start - b.start || a.id.localeCompare(b.id));
 }
 
-/** Members' adventures (Journey, Call for aid, Gathering) that have not ended, soonest first. */
+/** Members' Adventures (categories 1 to 3: one kind since 19 November 2026) that have not ended, soonest first. */
 export function adventures(notices: Notice[], now: number) {
   return notices
     .filter((n) => n.category >= 1 && n.category <= 3 && !n.cancelled && n.expires > now)

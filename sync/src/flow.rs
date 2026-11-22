@@ -174,6 +174,10 @@ pub fn pull(client: &Client, addons: &Path, still_closed: impl FnOnce() -> Resul
     // Crafting requests for the game (addon 0.8.13). Optional: a failure leaves the last file.
     let crafting = client.craft_requests();
     let directory = if matches!(&crafting, Ok(Some(_))) { Some(client.craft_directory()) } else { None };
+    // The guild bank for the addon's bank panel, and for officers the Wayfarers list (addon 1.0.1).
+    // Optional: a failure leaves the last file.
+    let bank = client.bank_game();
+    let wayfarers = client.wayfarers_game();
     still_closed()?;
     let mut report = datafile::write_data_addon(addons, &Archive { generated: download.generated, notices: download.notices, replies: download.replies, removed: download.removed })?;
     match roster {
@@ -195,6 +199,13 @@ pub fn pull(client: &Client, addons: &Path, still_closed: impl FnOnce() -> Resul
             datafile::write_crafting(addons, crafting.as_ref(), directory.as_ref(), download.generated)?;
         }
         Err(e) => report.crafting_problem = Some(format!("Could not update crafting data: {e:#}")),
+    }
+    if let Ok(bank) = bank {
+        datafile::write_bank(addons, bank.as_ref())?;
+    }
+    // A failed download keeps the last list (an officer's) until the next sync.
+    if let Ok(list) = wayfarers {
+        datafile::write_wayfarers(addons, list.as_ref())?;
     }
     Ok(report)
 }

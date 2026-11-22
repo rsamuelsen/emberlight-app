@@ -124,6 +124,61 @@ pub struct BankScan {
     pub bank_money: Option<i64>,
     pub tabs: Vec<BankTab>,
     pub money: Vec<BankLine>,
+    /// What lay in each tab and its Info text (addon 1.0.1, the newest scan only). `None` from an
+    /// older addon: then the field is left out and the server keeps what it had.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contents: Option<Vec<BankContents>>,
+    /// Each guild rank's bank settings, read by the guild master's addon only (addon 1.0.1).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ranks: Option<Vec<BankRank>>,
+}
+
+/// One tab as the addon saw it. `slots` is `None` when this character cannot look inside the tab.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BankContents {
+    pub tab: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slots: Option<Vec<BankSlot>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BankSlot {
+    pub slot: i64,
+    pub item_id: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub item: Option<String>,
+    pub count: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quality: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stack: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BankRank {
+    pub index: i64,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gold_per_day: Option<i64>,
+    pub tabs: Vec<BankRankTab>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BankRankTab {
+    pub tab: i64,
+    pub view: bool,
+    pub deposit: bool,
+    pub edit_text: bool,
+    pub stacks_per_day: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -156,6 +211,11 @@ pub struct BankLine {
 }
 
 const BANK_LINES: usize = 100;
+
+/// The tables in a list field (`contents`, `slots`, `ranks`), or `None` when it is missing.
+fn table_list<'a>(t: &'a Table, key: &str) -> Option<Vec<&'a Table>> {
+    field(t, key).and_then(Value::as_table).map(|t| t.values().filter_map(Value::as_table).collect())
+}
 
 /// The guild bank scans in one SavedVariables file, newest first. A line or tab that is not in the
 /// expected shape is left out; the server checks again.
@@ -201,7 +261,50 @@ pub fn export_bank_scans(globals: &BTreeMap<String, Value>) -> Vec<BankScan> {
         }
         tabs.truncate(12);
         let money = field(scan, "money").and_then(Value::as_table).into_iter().flat_map(|t| t.values()).filter_map(Value::as_table).filter_map(|l| line(l, true)).take(BANK_LINES).collect();
-        out.push(BankScan { character, scanned_at, bank_money: int(field(scan, "bankMoney"), 0, i64::MAX / 2), tabs, money });
+        // The Info text keeps its line breaks; anything else that could confuse a reader is dropped.
+        let info = |v: Option<&Value>| {
+            v.and_then(Value::as_bytes).and_then(|b| std::str::from_utf8(b).ok()).map(|t| {
+                let kept: String = t.chars().filter(|c| *c == '\n' || (!c.is_control() && *c != '|')).take(2047).collect();
+                kept.trim().to_owned()
+            })
+        };
+        let contents = table_list(scan, "contents").map(|tabs| {
+            let mut out: Vec<BankContents> = tabs.into_iter().filter_map(|t| {
+                let tab = int(field(t, "tab"), 1, 12)?;
+                let slots = table_list(t, "slots").map(|slots| {
+                    let mut kept: Vec<BankSlot> = slots.into_iter().filter_map(|s| Some(BankSlot {
+                        slot: int(field(s, "slot"), 1, 98)?,
+                        item_id: int(field(s, "itemId"), 1, 10_000_000)?,
+                        item: text(field(s, "item"), 100),
+                        count: int(field(s, "count"), 1, 100_000)?,
+                        quality: int(field(s, "quality"), 0, 10),
+                        stack: int(field(s, "stack"), 1, 100_000),
+                    })).collect();
+                    kept.sort_by_key(|s| s.slot);
+                    kept.dedup_by_key(|s| s.slot);
+                    kept
+                });
+                Some(BankContents { tab, name: text(field(t, "name"), 40), icon: int(field(t, "icon"), 0, i64::MAX / 2), text: info(field(t, "text")), slots })
+            }).collect();
+            out.sort_by_key(|t| t.tab);
+            out.dedup_by_key(|t| t.tab);
+            out
+        });
+        let ranks = table_list(scan, "ranks").map(|ranks| {
+            ranks.into_iter().filter_map(|r| Some(BankRank {
+                index: int(field(r, "index"), 0, 20)?,
+                name: text(field(r, "name"), 40)?,
+                gold_per_day: int(field(r, "goldPerDay"), 0, 10_000_000),
+                tabs: table_list(r, "tabs").unwrap_or_default().into_iter().filter_map(|t| Some(BankRankTab {
+                    tab: int(field(t, "tab"), 1, 12)?,
+                    view: field(t, "view").and_then(Value::as_bool) == Some(true),
+                    deposit: field(t, "deposit").and_then(Value::as_bool) == Some(true),
+                    edit_text: field(t, "editText").and_then(Value::as_bool) == Some(true),
+                    stacks_per_day: int(field(t, "stacksPerDay"), 0, 100_000).unwrap_or(0),
+                })).take(12).collect(),
+            })).take(20).collect::<Vec<_>>()
+        });
+        out.push(BankScan { character, scanned_at, bank_money: int(field(scan, "bankMoney"), 0, i64::MAX / 2), tabs, money, contents, ranks });
     }
     out.sort_by_key(|s| std::cmp::Reverse(s.scanned_at));
     out
@@ -1079,6 +1182,27 @@ mod tests {
         assert_eq!(json["bankMoney"], 1234567);
         assert_eq!(json["tabs"][0]["lines"][0], serde_json::json!({ "type": "deposit", "name": "Alice Example", "itemId": 2589, "item": "Linen Cloth", "count": 20, "hours": 3 }));
         assert_eq!(json["money"][1], serde_json::json!({ "type": "repair", "name": "Bob Example", "copper": 1234, "hours": 1460, "rough": true }));
+    }
+
+    #[test]
+    fn guild_bank_contents_and_ranks_are_sent_when_the_addon_read_them() {
+        let src = br#"EmberlightDB = { schemaVersion = 3, localData = { bankScans = {
+            { at = 1800000600, character = "Keeper Example-TestRealm", tabs = {}, money = {},
+              contents = { { tab = 1, name = "Cloth", icon = 133784, text = "Cloth here.\nThank you!",
+                             slots = { { slot = 2, itemId = 2589, item = "Linen Cloth", count = 20, quality = 1, stack = 20 }, { slot = 99, itemId = 1, count = 1 }, { slot = 3, itemId = 2592, count = 0 } } },
+                           { tab = 2, name = "Officers" } },
+              ranks = { { index = 1, name = "Flame Keeper", goldPerDay = 50, tabs = { { tab = 1, view = true, deposit = true, editText = false, stacksPerDay = 5 } } } } },
+            { at = 1800000000, character = "Keeper Example-TestRealm", tabs = {}, money = {} },
+        } } }"#;
+        let scans = export_bank_scans(&crate::lua::parse(src).unwrap());
+        let contents = scans[0].contents.as_ref().unwrap();
+        assert_eq!(contents[0].slots.as_ref().unwrap().len(), 1, "a slot out of range or with no items is left out");
+        assert_eq!(contents[1].slots, None, "a tab this character cannot look inside has no slots");
+        assert_eq!(scans[1].contents, None);
+        let json = serde_json::to_value(&scans[0]).unwrap();
+        assert_eq!(json["contents"][0], serde_json::json!({ "tab": 1, "name": "Cloth", "icon": 133784, "text": "Cloth here.\nThank you!", "slots": [{ "slot": 2, "itemId": 2589, "item": "Linen Cloth", "count": 20, "quality": 1, "stack": 20 }] }));
+        assert_eq!(json["ranks"][0], serde_json::json!({ "index": 1, "name": "Flame Keeper", "goldPerDay": 50, "tabs": [{ "tab": 1, "view": true, "deposit": true, "editText": false, "stacksPerDay": 5 }] }));
+        assert!(serde_json::to_value(&scans[1]).unwrap().get("contents").is_none(), "an older scan sends no contents field");
     }
 
     #[test]

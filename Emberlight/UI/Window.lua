@@ -471,7 +471,7 @@ function U.Refresh()
     U.pageTitle:SetText(U.homeView == "changed" and "Changes to your plans" or U.homeView == "joining" and "You are joining" or U.homeView == "unread" and "Unread notices"
         or writing and (U.editing and "Edit" or official and "New Guild Gathering" or "New Adventure") or U.labels[U.tab] or "")
     U.action:ClearAllPoints()
-    local actionX = writing and 38 or U.tab == "Roster" and 452 or browsing and 548 or 751
+    local actionX = writing and 38 or U.tab == "Roster" and 566 or browsing and 548 or 751
     -- The action button belongs to the window, the Officer desk's view buttons to its page (which hangs
     -- 16 below the window's top), so the button needs 16 more to share their centre line.
     at(U.action, actionX, U.tab == "Roster" and -115 or browsing and -121 or -68)

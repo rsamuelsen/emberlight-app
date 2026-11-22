@@ -38,6 +38,11 @@ SlashCmdList.EMBERLIGHT = function(message)
             DEFAULT_CHAT_FRAME:AddMessage(choice == "on" and "Emberlight: your professions will be shared with the guild's website again." or "Emberlight: your professions are no longer shared. The website will drop them after your next Companion sync.")
         end
         for _, line in ipairs(E.Professions.Lines()) do DEFAULT_CHAT_FRAME:AddMessage("Emberlight: " .. line) end
+    elseif type(message) == "string" and message:lower():match("^%s*banktip") then
+        local choice = message:lower():match("^%s*banktip%s+(%a+)")
+        if (choice == "on" or choice == "off") and E.Store.db then E.GuildBank.SetTooltip(choice == "on") end
+        DEFAULT_CHAT_FRAME:AddMessage(E.GuildBank.TooltipOn() and "Emberlight: item tooltips say how many the guild bank holds (from your last Companion sync). Type /emberlight banktip off to hide it."
+            or "Emberlight: item tooltips no longer show the guild bank. Type /emberlight banktip on to show it again.")
     elseif type(message) == "string" and message:lower():match("^%s*bank") then
         local choice = message:lower():match("^%s*bank%s+(%a+)")
         if choice == "on" or choice == "off" then E.GuildBank.SetEnabled(choice == "on") end
@@ -64,9 +69,10 @@ SlashCmdList.EMBERLIGHT = function(message)
             "/emberlight verify CODE: prove a character is yours (the website gives the code)",
             "/emberlight professions on | off: share your professions with the website, or not",
             "/emberlight requests: open Crafting",
+            "/emberlight banktip on | off: show on item tooltips how many the guild bank holds, or not",
             "/emberlight test grand | test update: see an announcement or the update notice, on your screen only",
             "/emberlight info: version, character and guild, for a bug report",
-            "Officers: /emberlight announce TEXT (or grand TEXT) sends an announcement; /emberlight bank on | off reads the guild bank log",
+            "Officers: /emberlight announce TEXT (or grand TEXT) sends an announcement; /emberlight bank on | off reads the guild bank",
         }) do DEFAULT_CHAT_FRAME:AddMessage(line, 1, .82, .35) end
     elseif type(message) == "string" and (message:lower():match("^%s*grand%s") or message:lower():match("^%s*announce%s")) then
         local ok, problem = E.Presence.SendGrand(message:match("^%s*%a+%s+(.*)$"))

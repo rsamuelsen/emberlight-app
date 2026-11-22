@@ -7,7 +7,8 @@ local function at(widget, x, y) widget:SetPoint("TOPLEFT", x, y); return widget 
 -- and Officer Alts only, the same in-game authority as posting guild events. Three views: "Roster check" (everyone in
 -- the guild, against the website), "Needs an invite" (members' characters not in the guild) and
 -- "Addon users" (who online uses Emberlight, and which version; Core/Presence.lua). A dot before
--- each name in the guild shows who is online now: green online, grey offline.
+-- each name in the guild shows who is online now: green online, grey offline. "Wayfarers" (1.0.1)
+-- lists the website's Wayfarers in its groups, with who is online now (Core/Wayfarers.lua).
 U.labels.Roster = "Officer desk"
 U.rosterView = "check"
 
@@ -54,7 +55,7 @@ function U.CreateRoster()
     U.Inlay(page, 8, -248, 944, 388, {.06,.085,.115,.97})
     U.rosterChips = {}
     local x = 38
-    for _, chip in ipairs({ { "check", "Roster check", 120 }, { "invite", "Needs an invite", 140 }, { "addon", "Addon users", 120 } }) do
+    for _, chip in ipairs({ { "check", "Roster check", 120 }, { "invite", "Needs an invite", 140 }, { "addon", "Addon users", 120 }, { "wayfarers", "Wayfarers", 110 } }) do
         local button = at(U.Button(page, chip[2], chip[3], function()
             U.rosterView = chip[1]; U.rosterList:SetVerticalScroll(0); U.RefreshRoster()
         end, "flat"), x, -102)
@@ -94,8 +95,28 @@ local function plural(n, one, many) return n .. " " .. (n == 1 and one or many) 
 local function lines(result, website, guildList)
     local out = {}
     local function head(text) out[#out + 1] = { head = text } end
-    local function row(cells, warn, indent, online) out[#out + 1] = { cells = cells, warn = warn, indent = indent, online = online } end
+    local function row(cells, warn, indent, online, whisper) out[#out + 1] = { cells = cells, warn = warn, indent = indent, online = online, whisper = whisper } end
     local function none(text) out[#out + 1] = { cells = { text }, muted = true } end
+    if U.rosterView == "wayfarers" then
+        local W = E.Wayfarers
+        local list = W.Website()
+        local now = E.Client.Now()
+        for _, group in ipairs(W.groups) do
+            local people = {}
+            for _, person in ipairs(list and list.list or {}) do if person.group == group.key then people[#people + 1] = person end end
+            if #people > 0 then
+                head(group.title .. " (" .. #people .. ")")
+                for _, person in ipairs(people) do
+                    local as = W.OnlineAs(person, guildList)
+                    local who = person.main and person.main ~= person.name and (person.main .. " (" .. person.name .. ")") or person.main or person.name
+                    row({ who, person.days and (person.days .. (person.days == 1 and " day" or " days")) or "", as and ("Online as " .. as) or (#person.characters == 0 and "No character linked" or "Offline"), W.Details(person, now) },
+                        group.key == "due", false, as ~= nil, as)
+                end
+            end
+        end
+        if list and #list.list == 0 then none("Nobody is a Wayfarer right now.") end
+        return out
+    end
     if U.rosterView == "addon" then
         local P = E.Presence
         local me = R.Key(E.Client.Name())
@@ -168,42 +189,62 @@ function U.RefreshRoster()
     for _, chip in ipairs(U.rosterChips) do U.SelectButton(chip, chip.key == U.rosterView) end
     for _, r in ipairs(U.rosterRows) do r:Hide() end
     local addonUsers = U.rosterView == "addon"
+    local wayfarers = U.rosterView == "wayfarers"
     local website
-    if not addonUsers then website = R.Website() end
+    if not addonUsers and not wayfarers then website = R.Website() end
+    local wayfarerList = wayfarers and E.Wayfarers.Website()
     local guild, total = R.Guild()
-    local ready = (addonUsers or website ~= nil) and guild ~= nil
-    U.rosterList:SetShown(ready)
+    local ready = (addonUsers or website ~= nil or wayfarerList) and guild ~= nil
+    U.rosterList:SetShown(ready and true or false)
     U.presenceHeading:SetShown(ready and U.rosterView == "check")
-    for i, h in ipairs(U.rosterHeads) do h:SetShown(ready and (i ~= 2 or not addonUsers)) end
+    for i, h in ipairs(U.rosterHeads) do
+        h:SetShown(ready and (i ~= 2 or not addonUsers) and true or false)
+        h:SetText(wayfarers and ({ "Wayfarer", "Days", "Online now", "Follow-up" })[i] or ({ "Character", "Main / alt", "In-game rank", "Details" })[i])
+    end
     U.rosterOffline:Hide()
-    if not addonUsers and not website then
-        U.rosterSummary:SetText("No member list yet. Sync in Emberlight Companion before you start the game: an officer's Companion brings the website's member list with each sync.")
-        return
+    if wayfarers then
+        if not wayfarerList then
+            U.rosterSummary:SetText("No Wayfarers list yet. Sync in Emberlight Companion before you start the game: an officer's Companion brings the website's Wayfarers list with each sync.")
+            return
+        end
+        if not guild then U.rosterSummary:SetText("You are not in a guild on this character."); return end
+        local online = 0
+        for _, person in ipairs(wayfarerList.list) do if E.Wayfarers.OnlineAs(person, guild) then online = online + 1 end end
+        local note = plural(#wayfarerList.list, "Wayfarer", "Wayfarers") .. ", " .. online .. " online now. List from " .. stamp(wayfarerList.generated) .. "."
+        if wayfarerList.generated and E.Client.Now() - wayfarerList.generated > R.staleAfter then note = note .. " It is a few days old: sync again for a current one." end
+        U.rosterSummary:SetText(note .. " Write notes and plan follow-ups on the website's Wayfarers page.")
     end
-    if not guild then U.rosterSummary:SetText("You are not in a guild on this character."); return end
-    local result = website and R.Check(website, guild)
-    local notes = {}
-    if website then
-        notes[#notes + 1] = "Website list from " .. stamp(website.generated) .. "."
-        if website.generated and E.Client.Now() - website.generated > R.staleAfter then notes[#notes + 1] = "It is a few days old: sync again for a current one." end
-        if not website.fresh then notes[#notes + 1] = "Discord ranks may be out of date (Warden had not checked them lately)." end
+    local result
+    if not wayfarers then
+        if not addonUsers and not website then
+            U.rosterSummary:SetText("No member list yet. Sync in Emberlight Companion before you start the game: an officer's Companion brings the website's member list with each sync.")
+            return
+        end
+        if not guild then U.rosterSummary:SetText("You are not in a guild on this character."); return end
+        result = website and R.Check(website, guild)
+        local notes = {}
+        if website then
+            notes[#notes + 1] = "Website list from " .. stamp(website.generated) .. "."
+            if website.generated and E.Client.Now() - website.generated > R.staleAfter then notes[#notes + 1] = "It is a few days old: sync again for a current one." end
+            if not website.fresh then notes[#notes + 1] = "Discord ranks may be out of date (Warden had not checked them lately)." end
+        end
+        local online = 0
+        for _, entry in ipairs(guild) do if entry.online then online = online + 1 end end
+        if U.rosterView == "addon" then
+            local using, heardOnline = E.Presence.Usage()
+            notes[#notes + 1] = (using and (using .. " of " .. heardOnline .. " online use Emberlight.") or
+                (plural(online, "member", "members") .. " online.")) .. " Version replies can take a minute."
+        elseif U.rosterView == "invite" then
+            notes[#notes + 1] = plural(result.missing, "character", "characters") .. " of " .. plural(#result.invite, "member", "members") .. " not in the guild."
+        else
+            notes[#notes + 1] = plural(#guild, "character", "characters") .. " in the guild, " .. online .. " online now: " .. #result.notOnWebsite .. " not on the website, " .. #result.wrongRank .. " with a different rank."
+        end
+        if not addonUsers and total and #guild < total then
+            notes[#notes + 1] = "WoW listed only " .. #guild .. " of " .. total .. " guild members, so this is not the whole guild."
+            U.rosterOffline:SetShown(SetGuildRosterShowOffline ~= nil)
+        end
+        U.rosterSummary:SetText(table.concat(notes, " "))
     end
-    local online = 0
-    for _, entry in ipairs(guild) do if entry.online then online = online + 1 end end
-    if U.rosterView == "addon" then
-        local using, heardOnline = E.Presence.Usage()
-        notes[#notes + 1] = (using and (using .. " of " .. heardOnline .. " online use Emberlight.") or
-            (plural(online, "member", "members") .. " online.")) .. " Version replies can take a minute."
-    elseif U.rosterView == "invite" then
-        notes[#notes + 1] = plural(result.missing, "character", "characters") .. " of " .. plural(#result.invite, "member", "members") .. " not in the guild."
-    else
-        notes[#notes + 1] = plural(#guild, "character", "characters") .. " in the guild, " .. online .. " online now: " .. #result.notOnWebsite .. " not on the website, " .. #result.wrongRank .. " with a different rank."
-    end
-    if not addonUsers and total and #guild < total then
-        notes[#notes + 1] = "WoW listed only " .. #guild .. " of " .. total .. " guild members, so this is not the whole guild."
-        U.rosterOffline:SetShown(SetGuildRosterShowOffline ~= nil)
-    end
-    U.rosterSummary:SetText(table.concat(notes, " "))
     local y = 0
     for i, item in ipairs(lines(result, website, guild)) do
         local r = line(i)
@@ -215,6 +256,14 @@ function U.RefreshRoster()
         r.presence:SetText(showPresence and (item.online and "Online" or "Offline") or "")
         local nameWidth = showPresence and 174 or columns[1][2]
         r.cells[1]:SetWidth(item.muted and 824 or nameWidth - (item.indent and 16 or 0))
+        -- An online Wayfarer gets a Whisper button at the end of the line, so an officer can say hello at once.
+        if item.whisper and not r.whisper then
+            r.whisper = U.Button(r, "Whisper", 84, function(self) U.Whisper(self.target) end, "flat")
+            r.whisper:SetHeight(22)
+            r.whisper:SetPoint("TOPRIGHT", -6, -3)
+        end
+        if r.whisper then r.whisper.target = item.whisper; r.whisper:SetShown(item.whisper ~= nil) end
+        r.cells[4]:SetWidth(item.whisper and columns[4][2] - 96 or columns[4][2])
         for c, cell in ipairs(r.cells) do
             local value = item.cells and item.cells[c] or ""
             cell:SetShown(item.head == nil)

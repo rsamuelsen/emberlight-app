@@ -3,7 +3,7 @@
 //! WoW loads addon files at login and `/reload` and never writes them back, so updating this
 //! folder cannot race the game's own SavedVariables save.
 
-use crate::api::{CraftDirectory, CraftRequests, RosterCheck};
+use crate::api::{BankGame, CraftDirectory, CraftRequests, RosterCheck, WayfarersGame};
 use crate::lua::{self, Value, field};
 use crate::records::{self, Notice, Removed, Reply, Skipped};
 use anyhow::{Context, Result, bail};
@@ -32,6 +32,18 @@ const CRAFTING_REQUESTS: usize = 100;
 pub const LATEST_FILE: &str = "Latest.lua";
 const LATEST_GLOBAL: &str = "EmberlightLatest";
 pub const LATEST_FORMAT: i64 = 1;
+/// The guild bank as the website last saw it (`Bank.lua`, global `EmberlightBank`), from
+/// `GET /v1/bank/game`, for the addon's bank panel and item tooltips. Addons before 1.0.1 never read it.
+pub const BANK_FILE: &str = "Bank.lua";
+const BANK_GLOBAL: &str = "EmberlightBank";
+pub const BANK_FORMAT: i64 = 1;
+const BANK_ITEMS: usize = 12 * 98;
+/// The officers' Wayfarers list (`Wayfarers.lua`, global `EmberlightWayfarers`), from
+/// `GET /v1/officer/wayfarers/game`; officers only. Addons before 1.0.1 never read it.
+pub const WAYFARERS_FILE: &str = "Wayfarers.lua";
+const WAYFARERS_GLOBAL: &str = "EmberlightWayfarers";
+pub const WAYFARERS_FORMAT: i64 = 1;
+const WAYFARERS: usize = 500;
 /// Limits that keep a damaged reply from writing a huge file; far above any real guild.
 const ROSTER_MEMBERS: usize = 2000;
 const ROSTER_CHARACTERS: usize = 50;
@@ -257,6 +269,88 @@ pub fn write_crafting(addons: &Path, requests: Option<&CraftRequests>, directory
     write_atomic(&dir.join(CRAFTING_FILE), content.as_bytes())
 }
 
+/// Text for a Lua string: no control characters but line breaks (Info text keeps them), no `|`
+/// (the game's escape character), at most `max` characters.
+fn game_text(v: &str, max: usize, lines: bool) -> String {
+    v.chars().filter(|c| (lines && *c == '\n') || (!c.is_control() && *c != '|')).take(max).collect()
+}
+
+/// The guild bank file. `None` (an older server, or not signed in) writes a file with no bank.
+pub fn render_bank(bank: Option<&BankGame>) -> String {
+    let mut s = String::from("-- Written by the Emberlight sync tool. Replaced on every sync; edits here are lost.\n");
+    let Some(bank) = bank else {
+        s.push_str("-- No guild bank was downloaded.\n");
+        return s;
+    };
+    let opt = |v: Option<i64>| v.map_or("nil".to_owned(), |n| n.to_string());
+    s.push_str(&format!("{BANK_GLOBAL} = {{\n\tformat = {BANK_FORMAT},\n\tgenerated = {},\n\treadAt = {},\n\tcopper = {},\n\ttabs = {{\n", bank.generated, opt(bank.read_at), opt(bank.copper)));
+    for t in bank.tabs.iter().filter(|t| (1..=12).contains(&t.tab)).take(12) {
+        s.push_str(&format!("\t\t{{ tab = {}, name = {}, text = {}, readAt = {} }},\n", t.tab, lua_string(&game_text(&t.name, 40, false)), lua_string(&game_text(&t.text, 2047, true)), opt(t.read_at)));
+    }
+    s.push_str("\t},\n\titems = {\n");
+    for i in bank.items.iter().filter(|i| i.item_id > 0 && i.count > 0).take(BANK_ITEMS) {
+        let tabs: Vec<String> = i.tabs.iter().take(12).map(|t| lua_string(&game_text(t, 40, false))).collect();
+        s.push_str(&format!("\t\t{{ id = {}, name = {}, count = {}, quality = {}, tabs = {{ {} }} }},\n", i.item_id, lua_string(&game_text(&i.name, 100, false)), i.count, opt(i.quality), tabs.join(", ")));
+    }
+    s.push_str("\t},\n\twanted = {\n");
+    for w in bank.wanted.iter().filter(|w| w.target > 0).take(60) {
+        s.push_str(&format!("\t\t{{ id = {}, name = {}, target = {}, have = {} }},\n", opt(w.item_id), lua_string(&game_text(&w.name, 100, false)), w.target, w.have.max(0)));
+    }
+    s.push_str(&format!("\t}},\n\trequestsOpen = {},\n\trequests = {{\n", bank.requests_open));
+    const STATUSES: [&str; 3] = ["open", "filled", "declined"];
+    for r in bank.requests.iter().filter(|r| r.id > 0 && r.count > 0 && STATUSES.contains(&r.status.as_str())).take(100) {
+        let txt = |v: Option<&str>, max: usize| v.map_or("nil".to_owned(), |t| lua_string(&game_text(t, max, false)));
+        s.push_str(&format!(
+            "\t\t{{ id = {}, character = {}, itemId = {}, item = {}, count = {}, note = {}, status = {}, answer = {}, decidedBy = {}, createdAt = {}, mine = {} }},\n",
+            r.id, lua_string(&game_text(&r.character, 60, false)), opt(r.item_id), lua_string(&game_text(&r.item, 100, false)), r.count,
+            lua_string(&game_text(&r.note, 200, false)), lua_string(&r.status), txt(r.answer.as_deref(), 200), txt(r.decided_by.as_deref(), 60), r.created_at, r.mine
+        ));
+    }
+    s.push_str("\t},\n}\n");
+    s
+}
+
+/// The officers' Wayfarers file. `None` (not an officer, or an older server) writes no list.
+pub fn render_wayfarers(list: Option<&WayfarersGame>) -> String {
+    let mut s = String::from("-- Written by the Emberlight sync tool. Replaced on every sync; edits here are lost.\n");
+    let Some(list) = list else {
+        s.push_str("-- Only officers get the Wayfarers list.\n");
+        return s;
+    };
+    s.push_str("-- The officers' Wayfarers list. Keep this computer's files private.\n");
+    let opt = |v: Option<i64>| v.map_or("nil".to_owned(), |n| n.to_string());
+    let txt = |v: Option<&str>, max: usize| v.map_or("nil".to_owned(), |t| lua_string(&game_text(t, max, false)));
+    const GROUPS: [&str; 6] = ["due", "hello", "quiet", "character", "away", "fine"];
+    s.push_str(&format!("{WAYFARERS_GLOBAL} = {{\n\tformat = {WAYFARERS_FORMAT},\n\tgenerated = {},\n\tlist = {{\n", list.generated));
+    for w in list.wayfarers.iter().filter(|w| GROUPS.contains(&w.group.as_str())).take(WAYFARERS) {
+        let characters: Vec<String> = w.characters.iter().filter(|c| roster_text(&c.name, 60) && roster_key(&c.key)).take(20)
+            .map(|c| format!("{{ name = {}, key = {}, main = {} }}", lua_string(&c.name), lua_string(&c.key), c.main)).collect();
+        let follow = w.last_follow_up.as_ref().map_or("nil".to_owned(), |f| format!("{{ label = {}, by = {}, at = {} }}", txt(f.label.as_deref(), 20), lua_string(&game_text(&f.by, 60, false)), f.at));
+        let next = w.next_follow_up.as_deref().filter(|d| d.len() == 10 && d.bytes().all(|b| b.is_ascii_digit() || b == b'-'));
+        s.push_str(&format!(
+            "\t\t{{ name = {}, main = {}, days = {}, group = {}, quietDays = {}, nextFollowUp = {}, followUpBy = {}, lastFollowUp = {}, mentor = {}, away = {}, lastSeen = {}, characters = {{ {} }} }},\n",
+            lua_string(&game_text(&w.name, 100, false)), txt(w.main.as_deref(), 60), opt(w.days), lua_string(&w.group), opt(w.quiet_days),
+            txt(next, 10), txt(w.follow_up_by.as_deref(), 100), follow, txt(w.mentor.as_deref(), 100), opt(w.away), opt(w.last_seen), characters.join(", ")
+        ));
+    }
+    s.push_str("\t},\n}\n");
+    s
+}
+
+/// Write `<addons>/Emberlight_Data/Bank.lua`. Callers must first confirm the game is not running.
+pub fn write_bank(addons: &Path, bank: Option<&BankGame>) -> Result<()> {
+    let dir = addons.join(ADDON_DIR);
+    fs::create_dir_all(&dir).with_context(|| format!("cannot create {}", dir.display()))?;
+    write_atomic(&dir.join(BANK_FILE), render_bank(bank).as_bytes())
+}
+
+/// Write `<addons>/Emberlight_Data/Wayfarers.lua`. Callers must first confirm the game is not running.
+pub fn write_wayfarers(addons: &Path, list: Option<&WayfarersGame>) -> Result<()> {
+    let dir = addons.join(ADDON_DIR);
+    fs::create_dir_all(&dir).with_context(|| format!("cannot create {}", dir.display()))?;
+    write_atomic(&dir.join(WAYFARERS_FILE), render_wayfarers(list).as_bytes())
+}
+
 /// Write `<addons>/Emberlight_Data/Roster.lua`. Callers must first confirm the game is not running.
 pub fn write_roster(addons: &Path, roster: Option<&RosterCheck>) -> Result<()> {
     let dir = addons.join(ADDON_DIR);
@@ -348,7 +442,7 @@ pub fn read_interface(addons: &Path) -> Result<String> {
 
 pub fn render_toc(interface: &str) -> String {
     format!(
-        "## Interface: {interface}\n## Title: Emberlight Data\n## Notes: Guild records downloaded by the Emberlight sync tool.\n## Author: Emberlight\n## Version: {FORMAT}\nData.lua\nRoster.lua\nCrafting.lua\nLatest.lua\n"
+        "## Interface: {interface}\n## Title: Emberlight Data\n## Notes: Guild records downloaded by the Emberlight sync tool.\n## Author: Emberlight\n## Version: {FORMAT}\nData.lua\nRoster.lua\nCrafting.lua\nLatest.lua\nBank.lua\nWayfarers.lua\n"
     )
 }
 
@@ -463,12 +557,60 @@ pub fn write_data_addon(addons: &Path, archive: &Archive) -> Result<WriteReport>
     if !latest.exists() {
         write_atomic(&latest, render_latest(None, 0).as_bytes())?;
     }
+    let bank = dir.join(BANK_FILE);
+    if !bank.exists() {
+        write_atomic(&bank, render_bank(None).as_bytes())?;
+    }
+    let wayfarers = dir.join(WAYFARERS_FILE);
+    if !wayfarers.exists() {
+        write_atomic(&wayfarers, render_wayfarers(None).as_bytes())?;
+    }
     write_atomic(&dir.join(format!("{ADDON_DIR}.toc")), render_toc(&interface).as_bytes())?;
     Ok(WriteReport { dir, written: out.notices.len(), rejected, roster: None, roster_problem: None, crafting_problem: None })
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn bank_and_wayfarers_files_are_written_for_the_addon() {
+        use crate::api::{BankGame, BankGameItem, BankGameRequest, BankGameTab, BankGameWanted, RosterCharacter, WayfarerGame, WayfarersGame};
+        let bank = BankGame {
+            generated: 1800000000, read_at: Some(1799999000), copper: Some(123),
+            tabs: vec![BankGameTab { tab: 1, name: "Cloth|r".into(), text: "Line one\nLine \"two\"".into(), read_at: Some(1799999000) }],
+            items: vec![BankGameItem { item_id: 2589, name: "Linen Cloth".into(), count: 24, quality: Some(1), tabs: vec!["Cloth".into()] }],
+            wanted: vec![BankGameWanted { item_id: None, name: "Wool Cloth".into(), target: 40, have: 2 }],
+            requests_open: true,
+            requests: vec![
+                BankGameRequest { id: 7, character: "Alice Example".into(), item_id: Some(2589), item: "Linen Cloth".into(), count: 5, note: "For |cffbandages".into(), status: "open".into(), answer: None, decided_by: None, created_at: 1799999500, mine: true },
+                BankGameRequest { id: 8, character: "Bob".into(), item_id: None, item: "Odd".into(), count: 1, note: String::new(), status: "withdrawn".into(), answer: None, decided_by: None, created_at: 1799999600, mine: false },
+            ],
+        };
+        let text = render_bank(Some(&bank));
+        let parsed = crate::lua::parse(text.as_bytes()).unwrap();
+        let t = parsed.get(BANK_GLOBAL).and_then(Value::as_table).unwrap();
+        assert_eq!(field(t, "copper").and_then(Value::as_int), Some(123));
+        assert!(text.contains("name = \"Clothr\""), "no escape characters reach the game");
+        assert!(text.contains("Line one\\nLine \\\"two\\\""));
+        assert!(text.contains("{ id = 2589, name = \"Linen Cloth\", count = 24, quality = 1, tabs = { \"Cloth\" } }"));
+        assert!(text.contains("{ id = nil, name = \"Wool Cloth\", target = 40, have = 2 }"));
+        assert!(text.contains("requestsOpen = true"));
+        assert!(text.contains("{ id = 7, character = \"Alice Example\", itemId = 2589, item = \"Linen Cloth\", count = 5, note = \"For cffbandages\", status = \"open\", answer = nil, decidedBy = nil, createdAt = 1799999500, mine = true }"));
+        assert!(!text.contains("withdrawn"), "only open and answered requests reach the game");
+        assert!(!render_bank(None).contains(BANK_GLOBAL));
+
+        let list = WayfarersGame { generated: 1800000000, wayfarers: vec![
+            WayfarerGame { name: "Alice".into(), main: Some("Alice Example".into()), days: Some(5), group: "hello".into(), quiet_days: Some(0), next_follow_up: Some("2026-11-30".into()), follow_up_by: None, last_follow_up: None, mentor: None, away: None, last_seen: Some(1799990000), characters: vec![RosterCharacter { name: "Alice Example".into(), key: "alice_example".into(), main: true }] },
+            WayfarerGame { name: "Odd".into(), main: None, days: None, group: "unknown".into(), quiet_days: None, next_follow_up: None, follow_up_by: None, last_follow_up: None, mentor: None, away: None, last_seen: None, characters: vec![] },
+        ] };
+        let text = render_wayfarers(Some(&list));
+        let parsed = crate::lua::parse(text.as_bytes()).unwrap();
+        let w = parsed.get(WAYFARERS_GLOBAL).and_then(Value::as_table).and_then(|t| field(t, "list")).and_then(Value::as_table).unwrap();
+        assert_eq!(w.len(), 1, "an unknown group is left out");
+        assert!(text.contains("nextFollowUp = \"2026-11-30\""));
+        assert!(text.contains("{ name = \"Alice Example\", key = \"alice_example\", main = true }"));
+        assert!(!render_wayfarers(None).contains(WAYFARERS_GLOBAL));
+    }
+
     use super::*;
 
     #[test]
@@ -568,7 +710,7 @@ mod tests {
         write_data_addon(dir.path(), &Archive::default()).unwrap();
         let data = dir.path().join(ADDON_DIR);
         assert!(fs::read_to_string(data.join(ROSTER_FILE)).unwrap().contains("Bob Example"), "writing the notices keeps the roster");
-        assert!(fs::read_to_string(data.join(format!("{ADDON_DIR}.toc"))).unwrap().ends_with("Data.lua\nRoster.lua\nCrafting.lua\nLatest.lua\n"));
+        assert!(fs::read_to_string(data.join(format!("{ADDON_DIR}.toc"))).unwrap().ends_with("Data.lua\nRoster.lua\nCrafting.lua\nLatest.lua\nBank.lua\nWayfarers.lua\n"));
         write_roster(dir.path(), None).unwrap();
         assert!(!fs::read_to_string(data.join(ROSTER_FILE)).unwrap().contains("Bob"));
     }

@@ -47,6 +47,8 @@ function S.Init(saved)
     -- Core/GuildBank.lua), read by the Companion. On unless the officer typed /emberlight bank off.
     saved.localData.bankScans = type(saved.localData.bankScans) == "table" and saved.localData.bankScans or {}
     if type(st.readBankLog) ~= "boolean" then st.readBankLog = true end
+    -- "Guild bank: 12" on item tooltips (1.0.1, Core/GuildBank.lua): on unless switched off.
+    if type(st.bankTooltip) ~= "boolean" then st.bankTooltip = true end
     -- When guildmates were last in game, as the guild window shows it (0.8.15, Core/GuildSeen.lua),
     -- read by the Companion for the officers' activity overview.
     saved.localData.guildSeen = type(saved.localData.guildSeen) == "table" and saved.localData.guildSeen or {}

@@ -8,6 +8,11 @@ local function at(widget, x, y) widget:SetPoint("TOPLEFT", x, y); return widget 
 -- at its last sync (Emberlight_Data/Crafting.lua) and this character's professions. Read only:
 -- asking for something, taking a request and marking it done are on the guild website, because
 -- the game cannot reach it.
+--
+-- Guild bank (1.0.1, the owner's request, 22 November 2026): a fourth view for every member with
+-- what the guild bank holds, each tab's Info text and the officers' wanted list, as the website last
+-- saw it (Emberlight_Data/Bank.lua, Core/GuildBank.lua). Searchable and read only: nothing in the
+-- bank can be taken or asked for from here.
 U.labels.Crafting = "Crafting"
 
 local columns = { { 4, 322 }, { 342, 204 }, { 562, 284 } }
@@ -46,7 +51,7 @@ function U.CreateCrafting()
     U.Inlay(page, 8, -144, 944, 492, {.044,.104,.102,.97})
     U.craftView = "requests"
     U.craftTabs = {}
-    for i, view in ipairs({ {"requests", "Requests"}, {"skills", "My professions"}, {"find", "Find a crafter"} }) do
+    for i, view in ipairs({ {"requests", "Requests"}, {"skills", "My professions"}, {"find", "Find a crafter"}, {"bank", "Guild bank"} }) do
         U.craftTabs[i] = at(U.Button(page, view[2], 152, function()
             U.craftView = view[1]; U.craftList:SetVerticalScroll(0); U.RefreshCrafting()
         end, "flat"), 38 + (i-1)*160, -102)
@@ -57,6 +62,10 @@ function U.CreateCrafting()
     U.findField:SetScript("OnTextChanged", function()
         U.findPage = 1; U.foundRecipe = nil; U.craftList:SetVerticalScroll(0); U.RefreshCrafting()
     end)
+    U.bankField = U.Field(page, "Search the guild bank", 38, -145, 432, 32, 100)
+    U.bankField.caption:SetTextColor(unpack(C.muted))
+    U.bankField:SetScript("OnTextChanged", function() U.craftList:SetVerticalScroll(0); U.RefreshCrafting() end)
+    U.bankSummary = at(U.FitText(U.Text(page, "", 14, C.muted), 436, 52, true), 486, -151)
     U.findBack = at(U.Button(page, "Back to recipes", 150, function()
         U.foundRecipe = nil; U.findPage = U.recipePage or 1; U.craftList:SetVerticalScroll(0); U.RefreshCrafting()
     end), 480, -165)
@@ -192,20 +201,99 @@ local function finderRows()
     return rows
 end
 
+-- The Guild bank view: Info texts, the wanted list and what the bank holds, or the items that match
+-- the search. At most 300 lines, so a full bank never builds a thousand rows at once.
+local function money(copper)
+    local g, sv, c = math.floor(copper / 10000), math.floor(copper % 10000 / 100), copper % 100
+    local parts = {}
+    if g > 0 then parts[#parts + 1] = g .. "g" end
+    if sv > 0 then parts[#parts + 1] = sv .. "s" end
+    if c > 0 or #parts == 0 then parts[#parts + 1] = c .. "c" end
+    return table.concat(parts, " ")
+end
+function U.BankRows(bank, query)
+    local rows = {}
+    local function note(text) rows[#rows + 1] = { cells = { text }, muted = true } end
+    if not bank then
+        note("The guild bank appears here after Emberlight Companion has run, once an officer has opened the bank in game.")
+        return rows
+    end
+    local function item(i) rows[#rows + 1] = { cells = { i.name, i.count .. (i.count == 1 and " item" or " items"), table.concat(i.tabs, ", ") } } end
+    if query ~= "" then
+        local found = 0
+        for _, i in ipairs(bank.items) do
+            if E.Fold(i.name):find(query, 1, true) then
+                found = found + 1
+                if found <= 300 then item(i) end
+            end
+        end
+        if found == 0 then note("The guild bank holds nothing by that name.") end
+        return rows
+    end
+    for _, t in ipairs(bank.tabs) do
+        if t.text ~= "" then
+            rows[#rows + 1] = { head = "About " .. t.name }
+            rows[#rows + 1] = { cells = { "" }, note = t.text }
+        end
+    end
+    -- Item requests, read only (asked and answered on the website, like crafting requests).
+    local mine, waiting = {}, {}
+    for _, r in ipairs(bank.requests or {}) do
+        if r.mine then mine[#mine + 1] = r elseif r.status == "open" then waiting[#waiting + 1] = r end
+    end
+    local said = { open = "Waiting", filled = "Given", declined = "Not this time" }
+    if #waiting > 0 then
+        rows[#rows + 1] = { head = "Members asking (" .. #waiting .. ")" }
+        for _, r in ipairs(waiting) do
+            rows[#rows + 1] = { cells = { r.count .. " x " .. r.item, "for " .. r.character, r.createdAt and ("asked " .. E.Client.Stamp(r.createdAt)) or "" }, note = r.note }
+        end
+    end
+    if #mine > 0 then
+        rows[#rows + 1] = { head = "Your requests (" .. #mine .. ")" }
+        for _, r in ipairs(mine) do
+            rows[#rows + 1] = { cells = { r.count .. " x " .. r.item, said[r.status] or r.status, r.decidedBy and ("by " .. r.decidedBy) or "" }, note = r.answer }
+        end
+    end
+    if #bank.wanted > 0 then
+        rows[#rows + 1] = { head = "Wanted by the guild (" .. #bank.wanted .. ")" }
+        for _, w in ipairs(bank.wanted) do
+            rows[#rows + 1] = { cells = { w.name, w.have .. " of " .. w.target, w.have >= w.target and "Enough for now" or "" } }
+        end
+    end
+    rows[#rows + 1] = { head = "In the guild bank (" .. #bank.items .. ")" }
+    if #bank.items == 0 then note("Nothing yet, or no tab you can see.") end
+    for n, i in ipairs(bank.items) do
+        if n > 300 then note("Search to see the rest."); break end
+        item(i)
+    end
+    return rows
+end
+
 function U.RefreshCrafting()
     if not U.craftPage then return end
     for _, r in ipairs(U.craftRows) do r:Hide() end
     local skills = U.craftView == "skills"
     U.SelectButton(U.craftTabs[1], U.craftView == "requests"); U.SelectButton(U.craftTabs[2], skills)
     local find = U.craftView == "find"
+    local bankView = U.craftView == "bank"
     U.SelectButton(U.craftTabs[3], find)
+    U.SelectButton(U.craftTabs[4], bankView)
     U.findField:GetParent():SetShown(find); U.findField.caption:SetShown(find)
+    U.bankField:GetParent():SetShown(bankView); U.bankField.caption:SetShown(bankView); U.bankSummary:SetShown(bankView)
     U.findPrev:SetShown(find); U.findNext:SetShown(find); U.findCount:SetShown(find)
-    U.findBack:SetShown(find and U.foundRecipe ~= nil); U.craftSummary:SetShown(not find)
+    U.findBack:SetShown(find and U.foundRecipe ~= nil); U.craftSummary:SetShown(not find and not bankView)
     U.craftShare:SetShown(skills)
     U.craftShare.label:SetText(P.Enabled() and "Pause sharing" or "Share my professions")
     local rows, emptyRequests
-    if find then rows = finderRows()
+    if bankView then
+        local bank = E.GuildBank.Website()
+        local parts = {}
+        if bank and bank.copper then parts[#parts + 1] = "The guild bank holds " .. money(bank.copper) .. "." end
+        if bank and bank.readAt then parts[#parts + 1] = "Last read in game " .. E.Client.Stamp(bank.readAt) .. " server time." end
+        parts[#parts + 1] = bank and bank.requestsOpen and "Ask for an item on the website's Guild Bank page." or "See more on the website's Guild Bank page."
+        U.bankSummary:SetText(table.concat(parts, " "))
+        rows = U.BankRows(bank, E.Fold(E.Trim(U.bankField:GetText())))
+    elseif find then rows = finderRows()
     elseif skills then
         U.craftSummary:SetText(P.Enabled() and "Your professions are shared with the guild. Open a profession window to update its known recipes."
             or "Sharing is paused. You can turn it on again here.")

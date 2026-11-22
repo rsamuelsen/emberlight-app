@@ -187,6 +187,129 @@ pub struct RosterCheck {
     pub members: Vec<RosterMember>,
 }
 
+/// `GET /v1/bank/game`: the guild bank as the website last saw it, for the addon's bank panel and
+/// item tooltips (22 November 2026). Only the tabs this member may see.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct BankGame {
+    pub generated: i64,
+    #[serde(default)]
+    pub read_at: Option<i64>,
+    #[serde(default)]
+    pub copper: Option<i64>,
+    #[serde(default)]
+    pub tabs: Vec<BankGameTab>,
+    #[serde(default)]
+    pub items: Vec<BankGameItem>,
+    #[serde(default)]
+    pub wanted: Vec<BankGameWanted>,
+    /// Item requests, read only in game (22 November 2026): officers get every open one, a member their own.
+    #[serde(default)]
+    pub requests_open: bool,
+    #[serde(default)]
+    pub requests: Vec<BankGameRequest>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BankGameRequest {
+    pub id: i64,
+    pub character: String,
+    #[serde(default)]
+    pub item_id: Option<i64>,
+    pub item: String,
+    pub count: i64,
+    #[serde(default)]
+    pub note: String,
+    pub status: String,
+    #[serde(default)]
+    pub answer: Option<String>,
+    #[serde(default)]
+    pub decided_by: Option<String>,
+    pub created_at: i64,
+    #[serde(default)]
+    pub mine: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BankGameTab {
+    pub tab: i64,
+    pub name: String,
+    #[serde(default)]
+    pub text: String,
+    #[serde(default)]
+    pub read_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BankGameItem {
+    pub item_id: i64,
+    #[serde(default)]
+    pub name: String,
+    pub count: i64,
+    #[serde(default)]
+    pub quality: Option<i64>,
+    #[serde(default)]
+    pub tabs: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BankGameWanted {
+    #[serde(default)]
+    pub item_id: Option<i64>,
+    pub name: String,
+    pub target: i64,
+    pub have: i64,
+}
+
+/// `GET /v1/officer/wayfarers/game`: the officers' Wayfarers list for the addon (22 November 2026).
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WayfarersGame {
+    pub generated: i64,
+    pub wayfarers: Vec<WayfarerGame>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WayfarerGame {
+    pub name: String,
+    #[serde(default)]
+    pub main: Option<String>,
+    #[serde(default)]
+    pub days: Option<i64>,
+    pub group: String,
+    #[serde(default)]
+    pub quiet_days: Option<i64>,
+    #[serde(default)]
+    pub next_follow_up: Option<String>,
+    #[serde(default)]
+    pub follow_up_by: Option<String>,
+    #[serde(default)]
+    pub last_follow_up: Option<WayfarerFollowUp>,
+    #[serde(default)]
+    pub mentor: Option<String>,
+    #[serde(default)]
+    pub away: Option<i64>,
+    #[serde(default)]
+    pub last_seen: Option<i64>,
+    #[serde(default)]
+    pub characters: Vec<RosterCharacter>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WayfarerFollowUp {
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub by: String,
+    pub at: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Announcement {
@@ -529,6 +652,31 @@ impl Client {
     /// Crafting requests for the game, or `None` from a server without them (before 7 November 2026).
     pub fn craft_requests(&self) -> Result<Option<CraftRequests>> {
         let res = self.http.get(self.url("/v1/professions/requests/game")).bearer_auth(&self.token).send().context("could not reach the Emberlight server")?;
+        if matches!(res.status(), StatusCode::FORBIDDEN | StatusCode::NOT_FOUND) {
+            return Ok(None);
+        }
+        if !res.status().is_success() {
+            bail!("the server refused the request ({})", res.status());
+        }
+        Ok(Some(res.json().context("the server sent an unexpected reply")?))
+    }
+
+    /// The guild bank for the game, or `None` from a server without it (before 22 November 2026).
+    pub fn bank_game(&self) -> Result<Option<BankGame>> {
+        let res = self.http.get(self.url("/v1/bank/game")).bearer_auth(&self.token).send().context("could not reach the Emberlight server")?;
+        if matches!(res.status(), StatusCode::FORBIDDEN | StatusCode::NOT_FOUND) {
+            return Ok(None);
+        }
+        if !res.status().is_success() {
+            bail!("the server refused the request ({})", res.status());
+        }
+        Ok(Some(res.json().context("the server sent an unexpected reply")?))
+    }
+
+    /// The officers' Wayfarers list, or `None` when this member is not an officer (or the server is
+    /// older): then no list may be kept on this computer.
+    pub fn wayfarers_game(&self) -> Result<Option<WayfarersGame>> {
+        let res = self.http.get(self.url("/v1/officer/wayfarers/game")).bearer_auth(&self.token).send().context("could not reach the Emberlight server")?;
         if matches!(res.status(), StatusCode::FORBIDDEN | StatusCode::NOT_FOUND) {
             return Ok(None);
         }

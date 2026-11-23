@@ -1,5 +1,5 @@
 local _, E = ...
-E.version = "1.0.1"
+E.version = "1.0.3"
 -- What members read for each kind of notice. Only the number travels between players and to the
 -- server, so these words can change without touching the protocol. Since 0.9.3 (19 November 2026,
 -- the owner's decision after the staff meeting) there are three kinds of event: a Story Event and

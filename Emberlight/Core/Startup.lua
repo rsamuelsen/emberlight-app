@@ -51,6 +51,8 @@ SlashCmdList.EMBERLIGHT = function(message)
         -- Opens the window on Crafting; the slash command is only a shortcut.
         if E.UI.frame and E.UI.frame:IsShown() then E.UI.Go("Crafting")
         else E.UI.Toggle(); if E.UI.frame and E.UI.frame:IsShown() then E.UI.Go("Crafting") end end
+    elseif type(message) == "string" and message:lower():match("^%s*map%s+debug%s*$") then
+        for _, line in ipairs(E.UI.MapDebugLines()) do DEFAULT_CHAT_FRAME:AddMessage("Emberlight: " .. line) end
     elseif type(message) == "string" and message:lower():match("^%s*map%s*%a*%s*$") then
         local choice = message:lower():match("^%s*map%s+(%a+)")
         if (choice == "on" or choice == "off") and E.Store.db then E.Map.SetEnabled(choice == "on") end
@@ -65,7 +67,7 @@ SlashCmdList.EMBERLIGHT = function(message)
         for _, line in ipairs({
             "Emberlight commands:",
             "/emberlight: open or close the window",
-            "/emberlight map on | off: show yourself and guildmates on the maps, or not",
+            "/emberlight map on | off: show yourself and guildmates on the maps, or not (map debug: where the flames sit, for a bug report)",
             "/emberlight verify CODE: prove a character is yours (the website gives the code)",
             "/emberlight professions on | off: share your professions with the website, or not",
             "/emberlight requests: open Crafting",

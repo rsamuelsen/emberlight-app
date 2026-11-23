@@ -327,6 +327,15 @@ function B.Start()
         pending = true
         C_Timer.After(1, function() pcall(read) end)
     end
+    -- The tab the guild bank window shows. The game sends it by itself when the bank opens, often
+    -- before the addon asks, and does not send it again when asked (1.0.2: before, that tab was
+    -- never counted as arrived and the website showed it empty).
+    local function current() return GetCurrentGuildBankTab and tonumber(GetCurrentGuildBankTab()) or nil end
+    local function hasItems(tab)
+        if not GetGuildBankItemLink then return false end
+        for slot = 1, B.slots do if GetGuildBankItemLink(tab, slot) then return true end end
+        return false
+    end
     -- Asks for the next tab's slots and Info text; the game answers one tab at a time.
     local function nextTab()
         waiting = table.remove(queue, 1)
@@ -334,8 +343,13 @@ function B.Start()
         local asked = waiting
         if QueryGuildBankTab then pcall(QueryGuildBankTab, asked) end
         if QueryGuildBankText then pcall(QueryGuildBankText, asked) end
-        -- No answer within a few seconds: go on with the next tab.
-        C_Timer.After(3, function() if waiting == asked then nextTab() end end)
+        -- No answer within a few seconds: the game had sent this tab already if it is the one on
+        -- show or its slots hold items; then it counts. Either way, go on with the next tab.
+        C_Timer.After(3, function()
+            if waiting ~= asked then return end
+            if current() == asked or hasItems(asked) then arrived[asked] = true; soon() end
+            nextTab()
+        end)
     end
     local function opened()
         if B.open then return end
@@ -347,7 +361,9 @@ function B.Start()
         for tab = 1, count do pcall(QueryGuildBankLog, tab) end
         pcall(QueryGuildBankLog, (MAX_GUILDBANK_TABS or 8) + 1)
         for tab = 1, count do
-            local _, _, viewable = GetGuildBankTabInfo and GetGuildBankTabInfo(tab)
+            -- `a and f()` keeps only f's first answer, so "viewable" (the third) needs select (1.0.2:
+            -- before, no tab was ever asked for and the website showed every tab empty).
+            local viewable = GetGuildBankTabInfo and select(3, GetGuildBankTabInfo(tab))
             if viewable then queue[#queue + 1] = tab end
         end
         C_Timer.After(.5, nextTab)
@@ -364,6 +380,9 @@ function B.Start()
         elseif event == "GUILDBANKFRAME_CLOSED" or (event == "PLAYER_INTERACTION_MANAGER_FRAME_HIDE" and banker and kind == banker) then B.open = false; waiting = nil
         elseif B.open and event == "GUILDBANKBAGSLOTS_CHANGED" then
             -- The tab asked for has arrived (or an item moved): read again, then ask for the next.
+            -- The tab on show is there too, even when it came before the addon asked.
+            local shown = current()
+            if shown then arrived[shown] = true end
             if waiting then arrived[waiting] = true; waiting = nil; C_Timer.After(.4, nextTab) end
             soon()
         elseif B.open and event == "GUILDBANK_UPDATE_TEXT" then

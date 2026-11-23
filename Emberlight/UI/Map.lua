@@ -256,6 +256,71 @@ function U.RefreshSharedPins(lib)
     pins.sharedUsed = used
 end
 
+-- The library keeps the world map's flames on the game's own map and the minimap's on the
+-- minimap, but it never hides a flame when the map closes, and other map addons that move the
+-- world map or swap the minimap can leave one standing on the screen (1.0.3: a member's flame
+-- stayed above her character after the world map was closed, and cleared minutes later). So
+-- every pass makes sure of it: a world flame shows only while the world map is open and the
+-- library has it on the map, and a minimap flame always belongs to the minimap the library uses.
+local function onMapNow(f)
+    local parent = f:GetParent()
+    return parent ~= nil and parent ~= UIParent
+end
+function U.SettleSharedPins(lib)
+    local open = WorldMapFrame ~= nil and WorldMapFrame.IsShown ~= nil and WorldMapFrame:IsShown() and true or false
+    local minimap = (type(lib) == "table" and lib.Minimap) or Minimap
+    for _, s in pairs(pins.shared) do
+        if open and onMapNow(s.world) then
+            if not s.world:IsShown() then s.world:Show() end
+        elseif s.world:IsShown() then
+            s.world:Hide()
+        end
+        if minimap and s.mini:GetParent() ~= minimap then s.mini:SetParent(minimap) end
+    end
+    for _, s in ipairs(pins.spare) do s.world:Hide(); s.mini:Hide() end
+end
+
+-- Closing the world map puts its flames away at once, not at the next pass.
+local function hideWorldFlames()
+    for _, s in pairs(pins.shared) do s.world:Hide() end
+    for _, s in ipairs(pins.spare) do s.world:Hide() end
+    for i = 1, #pins.world do pins.world[i]:Hide() end
+end
+function U.HookWorldMap()
+    if pins.hooked or not WorldMapFrame or not WorldMapFrame.HookScript then return end
+    if pcall(WorldMapFrame.HookScript, WorldMapFrame, "OnHide", hideWorldFlames) then pins.hooked = true end
+end
+
+-- /emberlight map debug: where the flames are, for a bug report. No names, only where they sit.
+local seenAddons = { "Questie", "TomTom", "HandyNotes", "GatherMate2", "Mapster", "Magnify", "Leatrix_Plus", "ElvUI", "SexyMap", "OpenMap", "Carbonite", "MapNotes", "WorldQuestTracker", "SilverDragon", "Chinchilla", "Minimap_Button_Bag", "MBB" }
+local function loaded(name)
+    local api = (C_AddOns and C_AddOns.IsAddOnLoaded) or IsAddOnLoaded
+    if not api then return false end
+    local ok, on = pcall(api, name)
+    return ok and on and true or false
+end
+local function describe(f)
+    if not f then return "none" end
+    local parent = f:GetParent()
+    local where = parent == nil and "no parent" or parent == UIParent and "UIParent" or parent == Minimap and "Minimap" or (parent.GetName and parent:GetName()) or "an unnamed frame"
+    return (f:IsShown() and "shown" or "hidden") .. (f.IsVisible and f:IsVisible() and ", visible" or "") .. ", on " .. where
+end
+function U.MapDebugLines()
+    local lines = {}
+    local lib = U.MapLibrary()
+    lines[#lines + 1] = "guild map " .. ((E.Store.db and E.Store.db.settings.guildMap) and "on" or "off") .. ", map library " .. (lib and "found" or "not found (flames placed by hand)")
+    lines[#lines + 1] = "world map " .. ((WorldMapFrame and WorldMapFrame.IsShown and WorldMapFrame:IsShown()) and "open" or "closed") .. ", flames from the library: " .. (pins.sharedUsed or 0)
+    local n = 0
+    for _, s in pairs(pins.shared) do
+        n = n + 1
+        if n <= 4 then lines[#lines + 1] = "flame " .. n .. ": world " .. describe(s.world) .. "; minimap " .. describe(s.mini) end
+    end
+    local names = {}
+    for _, name in ipairs(seenAddons) do if loaded(name) then names[#names + 1] = name end end
+    lines[#lines + 1] = "other map addons loaded: " .. (#names > 0 and table.concat(names, ", ") or "none of the usual ones")
+    return lines
+end
+
 function U.RefreshMapPins()
     local lib = U.MapLibrary()
     if lib then
@@ -264,6 +329,7 @@ function U.RefreshMapPins()
         for i = 1, #pins.mini do pins.mini[i]:Hide() end
         pins.worldUsed, pins.miniUsed = 0, 0
         pcall(U.RefreshSharedPins, lib)
+        pcall(U.SettleSharedPins, lib)
         return
     end
     pcall(U.RefreshWorldPins)
@@ -274,6 +340,7 @@ end
 -- while there is someone to show.
 function U.StartMapPins()
     if U.mapTicker or not CreateFrame then return end
+    U.HookWorldMap()
     local f = CreateFrame("Frame")
     U.mapTicker = f
     local since = 0
@@ -281,6 +348,7 @@ function U.StartMapPins()
         since = since + elapsed
         if since < .2 then return end
         since = 0
+        if not pins.hooked then U.HookWorldMap() end
         if not next(M.positions) and (pins.worldUsed or 0) == 0 and (pins.miniUsed or 0) == 0 and (pins.sharedUsed or 0) == 0 then return end
         U.RefreshMapPins()
     end)

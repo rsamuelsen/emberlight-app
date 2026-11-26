@@ -14,11 +14,22 @@ export interface Notice {
   title: string;
   location: string;
   body: string;
-  ownReplies?: { response: string }[];
+  ownReplies?: OwnReply[];
   authorName?: string | null;
+  /** The member's own character that hosts this event (it cannot answer it). */
+  authorCharacterId?: number | null;
+  /** False once the server takes no more answers (an event that ended). */
+  canReply?: boolean;
   /** A Story Event: an official event (category 4) the server marks as one (19 November 2026). */
   story?: boolean;
 }
+
+/** One answer of the member's own: which character gave it, and "I will join" or "Unable to attend". */
+export interface OwnReply { response: string; characterId?: number | null }
+
+/** The only two answers the server knows. There is no "Maybe". */
+export const ANSWER_JOIN = "I will join";
+export const ANSWER_DECLINE = "Unable to attend";
 
 export interface Settings {
   wowRoot: string | null;
@@ -103,6 +114,8 @@ export interface Claim {
   method: string | null;
   createdAt: number;
   reason?: string | null;
+  /** The member's main character (listed first when answering an event). */
+  main?: boolean;
 }
 
 export interface Announcement {
@@ -127,7 +140,9 @@ export interface GuildEvent {
   author: string;
   authorName: string | null;
   /** The signed-in member's own answers (empty on older servers). */
-  ownReplies?: { response: string }[];
+  ownReplies?: OwnReply[];
+  authorCharacterId?: number | null;
+  canReply?: boolean;
   /** A Story Event (false or missing on older servers). */
   story?: boolean;
 }
@@ -150,6 +165,8 @@ export const eventAsNotice = (e: GuildEvent): Notice => ({
   location: e.location ?? "",
   body: e.body,
   ownReplies: e.ownReplies,
+  authorCharacterId: e.authorCharacterId,
+  canReply: e.canReply,
   authorName: e.authorName,
   story: e.kind === "official" && e.story === true,
 });
@@ -191,6 +208,7 @@ export const api = {
   characters: () => call<CharactersView>("characters"),
   announcements: () => call<Announcement[]>("announcements"),
   guildEvents: (kind: "official" | "member") => call<GuildEvent[]>("guild_events", { kind }),
+  answerEvent: (scope: string, id: string, characterId: number, response: string) => call<OwnReply>("answer_event", { scope, id, characterId, response }),
   openLink: (url: string) => call<void>("open_link", { url }),
   syncNow: () => call<Overview>("sync_now"),
   updateAddon: () => call<Overview>("update_addon"),

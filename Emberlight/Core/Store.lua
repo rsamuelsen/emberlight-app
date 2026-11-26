@@ -33,6 +33,13 @@ function S.Init(saved)
     -- The guild map (0.9.0, Core/Map.lua): on unless the member switched it off (owner's decision,
     -- 18 November 2026). The first time, one line in chat says so and how to switch it off.
     if type(st.guildMap) ~= "boolean" then st.guildMap = true end
+    -- The Schedule as a list (as always) or as a month (1.0.4).
+    if st.scheduleView ~= "month" then st.scheduleView = "list" end
+    -- How an officers' announcement shows (1.0.4): the big banner mid-screen (as it always has) or
+    -- a small toast in the corner, and whether it plays its sound. Only the announcement's look
+    -- changes: the chat line and who may send one stay as they were.
+    if st.grandStyle ~= "toast" then st.grandStyle = "banner" end
+    if type(st.grandSound) ~= "boolean" then st.grandSound = true end
     -- How big the flames are: .75, 1 or 1.35.
     if st.flameSize ~= .75 and st.flameSize ~= 1.35 then st.flameSize = 1 end
     saved.localData.reminded = type(saved.localData.reminded) == "table" and saved.localData.reminded or {}

@@ -351,6 +351,15 @@ function U.Create()
     tab("Letters", 260, 140, true)
     tab("Mine", 405, 132, true)
     U.allEvents = at(U.Button(f, "All plans", 91, function() U.Go("Schedule") end, "flat"), 17, -121)
+    -- List or Month for the Schedule (1.0.4), on the line of the schedule's tabs.
+    local function scheduleView(choice)
+        S.db.settings.scheduleView = choice
+        U.selected = nil
+        if choice == "month" then U.OpenMonth() end
+        U.Refresh()
+    end
+    U.viewList = at(U.Button(f, "List", 84, function() scheduleView("list") end, "flat"), 740, -121)
+    U.viewMonth = at(U.Button(f, "Month", 90, function() scheduleView("month") end, "flat"), 828, -121)
     U.settingsButton = at(U.Button(f, "Settings", 98, function() U.Go("Settings") end, "header"), 803, -11)
     -- The realm's clock, in the header of every page (the owner, 19 November: it must always be visible,
     -- because every time in Emberlight is server time). Hover for the date and your own time.
@@ -387,7 +396,7 @@ function U.Create()
     if E.startupProblem then
         U.status:SetText(E.startupProblem)
         for _, button in pairs(U.tabs) do button:Disable() end
-        U.settingsButton:Disable(); U.allEvents:Hide(); U.nowButton:Hide(); U.action:Hide()
+        U.settingsButton:Disable(); U.allEvents:Hide(); U.viewList:Hide(); U.viewMonth:Hide(); U.nowButton:Hide(); U.action:Hide()
         f:Hide(); return
     end
     U.CreateHome()
@@ -436,6 +445,9 @@ function U.Refresh()
     local browsing = inSchedule and not U.expanded and not U.homeView
     U.allEvents:SetShown(browsing)
     U.SelectButton(U.allEvents, U.tab == "Schedule")
+    local scheduleOnly = browsing and U.tab == "Schedule"
+    U.viewList:SetShown(scheduleOnly); U.viewMonth:SetShown(scheduleOnly)
+    U.SelectButton(U.viewList, not U.MonthMode()); U.SelectButton(U.viewMonth, U.MonthMode())
     for _, key in ipairs({"Letters", "Noticeboard", "Mine"}) do U.tabs[key]:SetShown(browsing) end
     unread.Crafting = E.Professions.WaitingForMe()
     for tab, button in pairs(U.tabs) do
@@ -535,6 +547,10 @@ function U.CreateHome()
     U.homeJoin = at(U.Button(card, "I will join", 135, function()
         U.AnswerPlan(U.nextEvent, "I will join")
     end, "brass"), 30, -137)
+    -- "Can't attend" is as close as "I will join" (1.0.4): the answer exists, but it used to hide in the reader.
+    U.homeDecline = at(U.Button(card, "Can't attend", 135, function()
+        U.AnswerPlan(U.nextEvent, "Unable to attend")
+    end, "brass"), 175, -137)
     U.homeOpen = U.Button(card, "Read invitation", 156, function()
         if U.nextEvent then U.OpenEntry(U.nextEvent) end
     end, "brass")
@@ -554,8 +570,17 @@ function U.CreateHome()
         end, "row"), 38, -350 - (i-1)*30)
         row:SetHeight(30); row.label:Hide()
         row.clock = at(U.FitText(U.Text(row, "", 15, C.text), 182, 22, false), 6, -5)
-        row.title = at(U.FitText(U.Text(row, "", 16, C.ivory), 467, 22, false), 194, -5)
+        row.title = at(U.FitText(U.Text(row, "", 16, C.ivory), 362, 22, false), 194, -5)
         row.kind = at(U.FitText(U.Text(row, "", 14, C.goldHi), 169, 22, false), 692, -6)
+        -- The same answer as in the reader, one press from the list (1.0.4). Pressed on a row, it
+        -- does not open the invitation. Already answered: the word says so instead of a button.
+        row.decline = at(U.Button(row, "Can't attend", 112, function(self)
+            local entry = self:GetParent().entry
+            if entry then U.AnswerPlan(entry, "Unable to attend") end
+        end, "flat"), 566, -3)
+        row.decline:SetHeight(24)
+        row.declined = at(U.FitText(U.Text(row, "Can't attend", 14, C.muted), 112, 22, false), 566, -6)
+        row.declined:SetJustifyH("CENTER")
         row.dot = unreadMark(row)
         U.upcomingRows[i] = row
     end
@@ -600,15 +625,22 @@ function U.RefreshHome()
     U.homeCard:SetBackdropColor(unpack(look and look.back or {.045,.059,.085,.70}))
     U.homeCard:SetBackdropBorderColor(unpack(look and look.edge or C.gold))
     U.homeHead:SetTextColor(unpack(look and look.text or C.goldHi))
-    local canJoin = featured and not featured.own and featured.reply ~= "I will join"
-    U.homeJoin:SetShown(canJoin); U.homeJoin:SetEnabled(E.Sync.Ready() or false)
-    U.homeOpen:SetShown(featured ~= nil); U.homeOpen:ClearAllPoints(); at(U.homeOpen, canJoin and 175 or 30, -137)
+    -- Join and "Can't attend" take turns: each one is shown unless it is already the answer.
+    local canAnswer = featured and not featured.own
+    local canJoin = canAnswer and featured.reply ~= "I will join"
+    local canDecline = canAnswer and featured.reply ~= "Unable to attend"
+    local ready = E.Sync.Ready() or false
+    U.homeJoin:SetShown(canJoin); U.homeJoin:SetEnabled(ready)
+    U.homeDecline:SetShown(canDecline); U.homeDecline:SetEnabled(ready)
+    U.homeDecline:ClearAllPoints(); at(U.homeDecline, canJoin and 175 or 30, -137)
+    local shownButtons = (canJoin and 1 or 0) + (canDecline and 1 or 0)
+    U.homeOpen:SetShown(featured ~= nil); U.homeOpen:ClearAllPoints(); at(U.homeOpen, 30 + shownButtons * 145, -137)
     if featured then
         U.homeHead:SetText((official and "Official guild event" or "Member activity") .. "  /  " .. E.Kind(featured))
         U.homeTitle:SetText(clean(featured.title, 100))
         U.homeWhen:SetText((happening(featured) and "Started " or "") .. when(featured.start))
         local place = clean(featured.location, 100)
-        local response = featured.own and "You're hosting" or featured.reply == "I will join" and "You're going" or featured.reply
+        local response = featured.own and "You're hosting" or featured.reply == "I will join" and "You're going" or featured.reply == "Unable to attend" and "You can't attend" or featured.reply
         U.homeWhere:SetText((place ~= "" and place or "Place not told") .. (response and ("   /   " .. response) or ""))
     else
         U.homeHead:SetText("Guild activity")
@@ -625,6 +657,10 @@ function U.RefreshHome()
             row.clock:SetText(dayName(entry.start, entry) .. "  " .. E.Client.Clock(entry.start))
             row.title:SetText(clean(entry.title, 100)); row.kind:SetText(E.Kind(entry)); row.kind:SetTextColor(unpack(kindColors(entry).text))
             row.dot:SetShown(not entry.read and not entry.own)
+            local open = not entry.own and not entry.cancelled and entry.expires > now
+            row.decline:SetShown(open and entry.reply ~= "Unable to attend")
+            row.decline:SetEnabled(E.Sync.Ready() or false)
+            row.declined:SetShown(open and entry.reply == "Unable to attend")
             row:Show()
         end
     end
@@ -787,19 +823,27 @@ function U.CreateReader()
     end
     place(U.search:GetParent(), 38, -188, 790, 30)
     place(U.searchClear, 838, -188, 78, 30)
+    U.CreateMonth()
+end
 
+-- The Schedule shows either the list or, since 1.0.4, a month (UI/Month.lua). The choice is kept.
+function U.MonthMode()
+    return U.tab == "Schedule" and not U.homeView and S.db ~= nil and S.db.settings.scheduleView == "month"
 end
 
 function U.LayoutReader()
     local full = U.expanded == true
-    U.list:SetShown(not full); U.paper:SetShown(full); U.scheduleBand:SetShown(not full)
-    for _, chip in ipairs(U.whenChips) do chip:SetShown(not full); U.SelectButton(chip, chip.key == U.filterWhen and not U.dateFilter) end
+    -- In the month view the list, its filters and the date sheet give way to the month.
+    local list = not full and not U.MonthMode()
+    U.list:SetShown(list); U.paper:SetShown(full); U.scheduleBand:SetShown(list)
+    U.monthPage:SetShown(not full and U.MonthMode())
+    for _, chip in ipairs(U.whenChips) do chip:SetShown(list); U.SelectButton(chip, chip.key == U.filterWhen and not U.dateFilter) end
     local holder = U.search:GetParent()
-    holder:SetShown(not full); U.searchClear:SetShown(not full)
-    U.searchHint:SetShown(not full and U.search:GetText() == "")
-    U.browseDate:SetShown(not full and not U.homeView)
+    holder:SetShown(list); U.searchClear:SetShown(list)
+    U.searchHint:SetShown(list and U.search:GetText() == "")
+    U.browseDate:SetShown(list and not U.homeView)
     U.browseDate.label:SetText(U.dateFilter and E.Client.Date(U.dateFilter + 43200) or "Calendar")
-    if full and U.browseCalendar then U.browseCalendar:Hide() end
+    if (full or not list) and U.browseCalendar then U.browseCalendar:Hide() end
     U.SelectButton(U.browseDate, U.dateFilter ~= nil)
     U.expand.label:SetText(U.fromHome and "‹ Guild board" or "‹ Back to list")
 end
@@ -904,6 +948,7 @@ function U.RefreshReader()
         U.fromHome = nil; U.Refresh(); return
     end
     U.ShowEntry(U.selected)
+    if U.monthPage:IsShown() then U.RefreshMonth() end
     if U.answersSheet and U.answersSheet:IsShown() then
         if U.selected then U.OpenAnswers() else U.answersSheet:Hide() end
     end
@@ -1282,19 +1327,35 @@ function U.CreateSettings()
     U.reminderToggle = at(U.Button(page, "", 200, function()
         S.db.settings.reminders = not S.db.settings.reminders; U.RefreshSettings()
     end), 252, -409)
-    at(U.FitText(U.Text(page, "Reminders for your plans. Each invitation starts with a 15-minute reminder.", 14, C.muted), 416, 40, true), 38, -449)
+    at(U.FitText(U.Text(page, "A line in chat 15 minutes before a plan you joined.", 14, C.muted), 416, 20, false), 38, -449)
     -- Map sharing and the size of the class-coloured flames.
-    at(U.Text(page, "Guild map", 14, C.ivory), 38, -513)
+    at(U.Text(page, "Guild map", 14, C.ivory), 38, -483)
     U.mapToggle = at(U.Button(page, "", 76, function()
         E.Map.SetEnabled(not S.db.settings.guildMap); U.RefreshSettings()
-    end), 252, -502)
+    end), 252, -472)
     -- The flames' size: small, normal, large, round again.
     U.flameSize = at(U.Button(page, "", 120, function()
         local st = S.db.settings
         st.flameSize = st.flameSize == 1 and 1.35 or st.flameSize == 1.35 and .75 or 1
         U.RefreshSettings(); if U.RefreshMapPins then U.RefreshMapPins() end
-    end), 332, -502)
-    at(U.FitText(U.Text(page, "You and guildmates who turn it on see each other on the maps.", 14, C.muted), 416, 42, true), 38, -543)
+    end), 332, -472)
+    at(U.FitText(U.Text(page, "Guildmates who turn it on see each other on the maps.", 14, C.muted), 416, 20, false), 38, -513)
+    -- How an officers' announcement shows: the big banner mid-screen, or a small toast top left, and
+    -- its sound (1.0.4). "Test" shows one the way it will look.
+    at(U.Text(page, "Officer announcements", 14, C.ivory), 38, -553)
+    U.grandStyle = at(U.Button(page, "", 108, function()
+        local st = S.db.settings
+        st.grandStyle = st.grandStyle == "toast" and "banner" or "toast"
+        U.RefreshSettings()
+    end), 188, -542)
+    U.grandSound = at(U.Button(page, "", 104, function()
+        S.db.settings.grandSound = not S.db.settings.grandSound; U.RefreshSettings()
+    end), 300, -542)
+    U.grandTest = at(U.Button(page, "Try it", 52, function()
+        U.ShowGrand("This is how an announcement from the officers will look.", "an officer")
+    end, "ink"), 406, -542)
+    U.grandTest:SetHeight(32)
+    at(U.FitText(U.Text(page, "Only the look changes. You still see the line in guild chat.", 14, C.muted), 416, 20, false), 38, -582)
     -- At a glance: what is going on with this addon right now (shown while no help is open).
     U.about = {}
     U.about[1] = U.Rule(page, 510, -366, 412, C.gold)
@@ -1388,6 +1449,9 @@ function U.RefreshSettings()
     U.SelectButton(U.minimapToggle, not S.db.settings.minimap.hide)
     U.SelectButton(U.reminderToggle, S.db.settings.reminders)
     U.SelectButton(U.mapToggle, S.db.settings.guildMap)
+    U.grandStyle.label:SetText(S.db.settings.grandStyle == "toast" and "Small toast" or "Big banner")
+    U.grandSound.label:SetText("Sound: " .. (S.db.settings.grandSound and "On" or "Off"))
+    U.SelectButton(U.grandSound, S.db.settings.grandSound)
     local size = S.db.settings.flameSize
     U.flameSize.label:SetText("Size: " .. (size == .75 and "Small" or size == 1.35 and "Large" or "Normal"))
     U.flameSize:SetEnabled(S.db.settings.guildMap)

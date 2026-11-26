@@ -91,7 +91,7 @@ let characters: CharactersView = {
   realm: "TestRealm",
   realms: ["TestRealm"],
   mine: [
-    { id: 1, name: "Alice", status: "verified", method: "officer", createdAt: now() - 86400 },
+    { id: 1, name: "Alice", status: "verified", method: "officer", createdAt: now() - 86400, main: true },
     { id: 2, name: "Alice Example", status: "pending", method: null, createdAt: now() - 3600 },
   ],
   found: [{ firstName: "Bob", surname: null, name: "Bob", realm: "TestRealm" }],
@@ -130,7 +130,8 @@ if (view === "showcase") {
   characters = {
     ...characters,
     mine: [
-      { id: 1, name: "Alice Example", status: "verified", method: "officer", createdAt: now() - 86400 * 20 },
+      { id: 3, name: "Cora Example", status: "verified", method: "officer", createdAt: now() - 86400 * 10 },
+      { id: 1, name: "Alice Example", status: "verified", method: "officer", createdAt: now() - 86400 * 20, main: true },
       { id: 2, name: "Bob Example", status: "pending", method: null, createdAt: now() - 3600 },
     ],
     found: [],
@@ -144,6 +145,13 @@ if (view === "stress") {
   state = { ...state, notices: sample.map(n => ({ ...n, title: n.title + " with a very long title ".repeat(12), location: "A long location name ".repeat(15), body: "Long event details. ".repeat(100) })) };
   announcements = Array.from({ length: 12 }, (_, i) => ({ ...announcements[i % 2], id: String(i), content: "# " + "An unusually long announcement title ".repeat(10) + "\n" + "A full paragraph for checking the reader. ".repeat(80) }));
   characters = { ...characters, mine: Array.from({ length: 12 }, (_, i) => ({ ...characters.mine[0], id: i, name: "Alexanderthewayfarer".repeat(5), status: (["verified", "pending", "refused"] as const)[i % 3] })) };
+}
+
+// Answers given in this preview, by event and character (the first showcase event starts as joined).
+const mockAnswers: Record<string, Map<number, string>> = {};
+{
+  const first = state.notices.find(n => n.category === 4);
+  if (first) mockAnswers[`${first.scope}/${first.id}`] = new Map([[1, "I will join"]]);
 }
 
 export async function handle(cmd: string, args?: Record<string, unknown>): Promise<unknown> {
@@ -237,7 +245,18 @@ export async function handle(cmd: string, args?: Record<string, unknown>): Promi
       return state.notices
         .filter((n) => (args?.kind === "official" ? n.category === 4 : n.category !== 4) && !n.cancelled)
         .sort((a, b) => a.start - b.start)
-        .map((n) => ({ scope: n.scope, id: n.id, kind: (["", "expedition", "help", "rp", "official"] as const)[n.category], title: n.title, location: n.location || null, body: n.body, start: n.start, expires: n.expires, author: n.author, authorName: n.author.split("-")[0], story: n.story === true, ownReplies: n.category === 4 && n.id === state.notices.find(n => n.category === 4)?.id ? [{ response: "I will join" }] : [] }));
+        .map((n) => ({ scope: n.scope, id: n.id, kind: (["", "expedition", "help", "rp", "official"] as const)[n.category], title: n.title, location: n.location || null, body: n.body, start: n.start, expires: n.expires, author: n.author, authorName: n.author.split("-")[0], story: n.story === true, canReply: n.expires > now(), authorCharacterId: null, ownReplies: [...(mockAnswers[`${n.scope}/${n.id}`] ?? new Map()).entries()].map(([characterId, response]) => ({ characterId, response })) }));
+    case "answer_event": {
+      // The server keeps one answer per character and event; the newest wins.
+      if (view === "offline") throw "Could not reach the Emberlight server.";
+      await wait(300);
+      if (args?.response !== "I will join" && args?.response !== "Unable to attend") throw "That is not an answer the server takes.";
+      const key = `${args.scope}/${args.id}`;
+      const kept = mockAnswers[key] ?? new Map<number, string>();
+      kept.set(args.characterId as number, args.response as string);
+      mockAnswers[key] = kept;
+      return { characterId: args.characterId, response: args.response };
+    }
     case "open_link":
       return;
     case "characters":

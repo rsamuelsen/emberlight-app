@@ -567,6 +567,14 @@ select option { color: var(--ivory); background: var(--surface-2); }
 .event-details-time { color: var(--gold-hi); font-size: 14px; }
 .event-full-text { white-space: pre-wrap; overflow-wrap: anywhere; font: 16px/1.7 var(--ui); margin: 24px 0; user-select: text; }
 .event-dialog > p { font-size: 14px; }
+.answer-box { display: grid; gap: 12px; margin: 22px 0 16px; padding: 16px; border: 1px solid var(--line); border-radius: var(--radius); background: #0c172766; }
+.answer-as { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; font-size: 13px; color: var(--ivory-dim); }
+.answer-buttons { display: flex; flex-wrap: wrap; gap: 10px; }
+.answer-buttons .btn[aria-pressed=true]:not(.btn-primary) { border-color: var(--gold); color: var(--gold-hi); }
+.answer-buttons .btn[aria-pressed=true].btn-primary { box-shadow: 0 0 0 2px var(--gold-hi); }
+.answer-box p { margin: 0; font-size: 13px; }
+.answer-saved { color: var(--success); }
+.answer-site { margin-top: 4px; }
 .character-reason { grid-column: 2; font-size: 13px; color: var(--ivory-dim); }
 .character-reason p { margin: 6px 0; }
 .detected-list li { position: relative; padding-right: 72px; }

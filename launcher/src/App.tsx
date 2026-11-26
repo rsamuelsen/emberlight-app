@@ -510,7 +510,7 @@ export function App() {
           )}
         </div>
       </main>
-      {selectedEvent && <EventDetails event={selectedEvent} onClose={() => setSelectedEvent(null)} />}
+      {selectedEvent && <EventDetails key={`${selectedEvent.scope}/${selectedEvent.id}`} event={selectedEvent} characters={characters} onClose={() => setSelectedEvent(null)} onAnswered={() => guild.refresh(true)} />}
         </>
       )}
     </div>

@@ -27,11 +27,7 @@ function EmberlightToggle() E.UI.Toggle() end
 function Emberlight_OnAddonCompartmentClick() E.UI.Toggle() end
 SLASH_EMBERLIGHT1 = "/emberlight"
 SlashCmdList.EMBERLIGHT = function(message)
-    local code = type(message) == "string" and message:match("^%s*[Vv][Ee][Rr][Ii][Ff][Yy]%s*(.*)$")
-    if code then
-        local ok, problem = E.Sync.Verify(code)
-        DEFAULT_CHAT_FRAME:AddMessage(ok and "Emberlight: proof sent. Guild members online will report it to the website at their next sync." or ("Emberlight: " .. problem))
-    elseif type(message) == "string" and message:lower():match("^%s*professions") then
+    if type(message) == "string" and message:lower():match("^%s*professions") then
         local choice = message:lower():match("^%s*professions%s+(%a+)")
         if choice == "on" or choice == "off" then
             E.Professions.SetEnabled(choice == "on")
@@ -68,7 +64,6 @@ SlashCmdList.EMBERLIGHT = function(message)
             "Emberlight commands:",
             "/emberlight: open or close the window",
             "/emberlight map on | off: show yourself and guildmates on the maps, or not (map debug: where the flames sit, for a bug report)",
-            "/emberlight verify CODE: prove a character is yours (the website gives the code)",
             "/emberlight professions on | off: share your professions with the website, or not",
             "/emberlight requests: open Crafting",
             "/emberlight banktip on | off: show on item tooltips how many the guild bank holds, or not",

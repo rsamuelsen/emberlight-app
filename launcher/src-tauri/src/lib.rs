@@ -324,6 +324,14 @@ async fn guild_events(app: AppHandle, kind: String) -> Result<Vec<api::GuildEven
     blocking(app, move |app| signed_in_client(app)?.events(&kind).map_err(|e| e.to_string())).await
 }
 
+/// "I'll join" or "I can't attend" for one of the member's own verified characters. This is the
+/// website's own answer route (4 October 2026), so website, game and Companion never make double
+/// answers: the server keeps one per character and event, and the newest wins.
+#[tauri::command]
+async fn answer_event(app: AppHandle, scope: String, id: String, character_id: i64, response: String) -> Result<api::OwnReply, String> {
+    blocking(app, move |app| signed_in_client(app)?.answer_event(&scope, &id, character_id, &response).map_err(|e| e.to_string())).await
+}
+
 #[tauri::command]
 fn desktop_settings(app: AppHandle) -> Result<bool, String> {
     app.autolaunch().is_enabled().map_err(|e| e.to_string())
@@ -711,6 +719,7 @@ pub fn run() {
             characters,
             announcements,
             guild_events,
+            answer_event,
             notify,
             open_link,
             sync_now,

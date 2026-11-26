@@ -4,9 +4,10 @@ local _, E = ...
 --
 -- Version: with sharing on, every addon tells guildmates online its version (kind "A" in
 -- Core/Sync.lua) whenever it shares its notices: at login or reload, and again when a guildmate
--- asks (every few minutes). A version newer than this one is believed when an officer's addon
--- (guild master, Flame Keeper, Officer Alt) says it, or two different members' addons do, so one
--- member cannot make the whole guild think it is out of date. The newest believed version is kept
+-- asks (every few minutes). A version newer than this one is believed only when two different
+-- members' addons say it, officers included (owner's decision, 26 November 2026: so one officer
+-- can test a new version without telling the whole guild it is out of date). One member alone,
+-- of any rank, is never believed. The newest believed version is kept
 -- in EmberlightDB.localData.newestAddon, so the next login can tell the member even before anyone
 -- answers. The member is told once per login or reload, in the chat window, never again until the
 -- next one.
@@ -78,7 +79,7 @@ function P.Notify(now)
 end
 
 -- A guildmate's addon told its version. `officer` is the sender's in-game authority, from the
--- guild roster, never from the message.
+-- guild roster; it no longer counts for more than anyone else (kept so the caller does not change).
 function P.Heard(sender, version, officer, now)
     if type(sender) ~= "string" or not P.Parse(version) then return false end
     now = now or E.Client.Now()
@@ -100,7 +101,7 @@ function P.Heard(sender, version, officer, now)
         local count = 0
         for _ in pairs(votes) do count = count + 1 end
         local d = db()
-        if d and (officer or count >= 2) and (not P.Newest() or P.Newer(version, P.Newest())) then
+        if d and count >= 2 and (not P.Newest() or P.Newer(version, P.Newest())) then
             d.newestAddon = { version = version, at = now }
             P.Notify(now)
         end

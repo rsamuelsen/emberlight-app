@@ -350,19 +350,10 @@ function N.Moderate(entry)
     entry.cancelled = true; entry.moderated = true; entry.moderator = me; entry.moderatedBy = roster[me].name; entry.modRevision = revision
     return true
 end
--- Proof that a website character claim is really this player's: the website shows a code, the
--- member types `/emberlight verify CODE` on that character, and every guild member online sees it
--- arrive from that character (WoW names the sender). Their sync tool reports what they saw; the
--- claimant's own client never records its own code, so the proof always comes from someone else.
+-- The in-game character proof (`/emberlight verify CODE`) was dropped on 26 November 2026: officers
+-- check names by hand and nothing asks a member for a code any more. This addon neither sends nor
+-- offers it. Older addons may still send a "V" record, so receiving one stays harmless (below).
 N.PROOF_CODE = "^[A-Z2-9]+$"
-function N.Verify(code)
-    code = type(code) == "string" and E.Trim(code):upper() or ""
-    if #code ~= 8 or not code:match(N.PROOF_CODE) then return nil, "Type the 8-character code the website shows, like /emberlight verify ABCD2345." end
-    if not N.Ready() then return nil, "Sharing is not ready. Check Settings, and be in your guild." end
-    local ok, problem = N.Queue({ "V", N.guild, code }, "V:" .. code)
-    if not ok then return nil, problem end
-    return true
-end
 function N.Pending(entry)
     local prefix = "N:" .. entry.id .. ":" .. entry.revision
     for _, q in ipairs(N.queue) do if q.key == prefix then return true end end

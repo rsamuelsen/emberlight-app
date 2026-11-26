@@ -19,7 +19,43 @@ local function animate(b, elapsed)
     if b.age >= math.max(SLIDE, FLASH) then b:SetScript("OnUpdate", nil) end
 end
 
+-- The quieter choice (Settings, 1.0.4): a small card in the top left corner, away from the middle
+-- of the screen, for eight seconds. A click puts it away.
+local function showToast(text, from)
+    local t = U.grandToast
+    if not t then
+        t = U.Panel(UIParent, 340, 96, { .10, .035, .05, .94 })
+        t:SetBackdropBorderColor(unpack(GOLD))
+        t:SetPoint("TOPLEFT", 24, -170)
+        t:SetFrameStrata("HIGH")
+        t:EnableMouse(true)
+        t.crest = t:CreateTexture(nil, "ARTWORK")
+        t.crest:SetSize(44, 44); t.crest:SetPoint("TOPLEFT", 12, -12)
+        t.crest:SetTexture(media .. "Crest64.tga")
+        t.from = U.FitText(U.Text(t, "", 14, GOLD, nil, "caps"), 262, 18, false)
+        t.from:SetPoint("TOPLEFT", 66, -10)
+        t.text = U.FitText(U.Text(t, "", 15, IVORY, nil, "game"), 262, 60, true)
+        t.text:SetPoint("TOPLEFT", 66, -30)
+        t:SetScript("OnMouseDown", function(self) self:Hide() end)
+        U.grandToast = t
+    end
+    t.from:SetText("From " .. (from ~= "" and from or "an officer"))
+    t.text:SetText(text)
+    t:SetAlpha(1); t:Show()
+    if t.timer then t.timer:Cancel() end
+    t.timer = C_Timer.NewTimer(8, function() t:Hide(); t.timer = nil end)
+end
+
 function U.ShowGrand(text, from)
+    local st = E.Store.db and E.Store.db.settings
+    local sound = not st or st.grandSound ~= false
+    if st and st.grandStyle == "toast" then
+        if U.grandBanner then U.grandBanner:Hide() end
+        showToast(text, from)
+        if sound and PlaySound then pcall(PlaySound, SOUNDKIT and SOUNDKIT.IG_QUEST_LIST_COMPLETE or 878) end
+        return
+    end
+    if U.grandToast then U.grandToast:Hide() end
     local b = U.grandBanner
     if not b then
         b = CreateFrame("Frame", nil, UIParent)
@@ -48,7 +84,7 @@ function U.ShowGrand(text, from)
     b:SetAlpha(0); b:Show()
     b:SetScript("OnUpdate", animate)
     -- The quest-complete fanfare, not the raid warning horn (the owner, 19 November).
-    if PlaySound then pcall(PlaySound, SOUNDKIT and SOUNDKIT.IG_QUEST_LIST_COMPLETE or 878) end
+    if sound and PlaySound then pcall(PlaySound, SOUNDKIT and SOUNDKIT.IG_QUEST_LIST_COMPLETE or 878) end
     if b.timer then b.timer:Cancel() end
     b.timer = C_Timer.NewTimer(15, function() b:Hide(); b.timer = nil end)
 end

@@ -57,5 +57,10 @@ function E.Client.Weekday(timestamp) return ((tonumber(date("!%w", timestamp + E
 function E.Client.MonthDay(timestamp) return tonumber(date("!%d", timestamp + E.Client.RealmOffset())) or 0 end
 function E.Client.Month(timestamp) return date("!%B", timestamp + E.Client.RealmOffset()) end
 function E.Client.MonthYear(timestamp) return date("!%B %Y", timestamp + E.Client.RealmOffset()) end
+-- The year and the month number (1 to 12), for matching the game's own calendar.
+function E.Client.YearMonth(timestamp)
+    local offset = E.Client.RealmOffset()
+    return tonumber(date("!%Y", timestamp + offset)), tonumber(date("!%m", timestamp + offset))
+end
 -- The same moment on the member's own computer clock.
 function E.Client.LocalClock(timestamp) return date("%H:%M", timestamp) end

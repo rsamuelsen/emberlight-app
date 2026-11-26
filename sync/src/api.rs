@@ -44,6 +44,9 @@ pub struct Claim {
     pub created_at: i64,
     #[serde(default, alias = "refuseReason")]
     pub reason: Option<String>,
+    /// The member's main character (the website lists it first when answering events).
+    #[serde(default)]
+    pub main: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -347,12 +350,30 @@ pub struct GuildEvent {
     /// The signed-in member's own answers (website attendance; absent on older servers).
     #[serde(default)]
     pub own_replies: Vec<OwnReply>,
+    /// The member's character that hosts this event: it cannot answer its own event.
+    #[serde(default)]
+    pub author_character_id: Option<i64>,
+    /// Whether the server takes answers for this event (false once it has ended).
+    #[serde(default = "answers_open")]
+    pub can_reply: bool,
+}
+
+fn answers_open() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct OwnReply {
     pub response: String,
+    /// Which of the member's characters gave it (missing on older servers).
+    #[serde(default)]
+    pub character_id: Option<i64>,
 }
+
+/// The only two answers the server knows (`server/src/replies.ts`). There is no "Maybe".
+pub const ANSWER_JOIN: &str = "I will join";
+pub const ANSWER_DECLINE: &str = "Unable to attend";
 
 #[derive(Deserialize)]
 struct ErrorBody {
@@ -586,6 +607,35 @@ impl Client {
         Ok(self.send::<Reply>(self.http.get(self.url(&format!("/v1/events?kind={kind}"))))?.events)
     }
 
+    /// Answers an event as one of the member's own verified characters, the same request the
+    /// website sends (`POST /v1/events/reply`): one answer per character and event, the newest
+    /// wins, and the member's name never has to be typed. Returns the answer the server kept.
+    pub fn answer_event(&self, scope: &str, id: &str, character_id: i64, response: &str) -> Result<OwnReply> {
+        if response != ANSWER_JOIN && response != ANSWER_DECLINE {
+            bail!("unknown answer");
+        }
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Body<'a> {
+            scope: &'a str,
+            id: &'a str,
+            character_id: i64,
+            response: &'a str,
+        }
+        #[derive(Deserialize)]
+        struct Kept {
+            response: String,
+        }
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Reply {
+            character_id: i64,
+            reply: Kept,
+        }
+        let kept: Reply = self.send(self.http.post(self.url("/v1/events/reply")).json(&Body { scope, id, character_id, response }))?;
+        Ok(OwnReply { response: kept.reply.response, character_id: Some(kept.character_id) })
+    }
+
     pub fn characters(&self) -> Result<MyCharacters> {
         self.send(self.http.get(self.url("/v1/characters")))
     }
@@ -723,6 +773,28 @@ mod tests {
         let legacy: Claim = serde_json::from_str(r#"{"id":1,"name":"Example","status":"verified","method":"officer","createdAt":1}"#).unwrap();
         assert_eq!(legacy.reason, None);
         assert_eq!(serde_json::to_value(current).unwrap()["reason"], "Check the name");
+    }
+
+    #[test]
+    fn events_carry_the_answer_details_the_buttons_need() {
+        let e: GuildEvent = serde_json::from_str(r#"{"scope":"s","id":"i","kind":"official","title":"T","start":1,"expires":2,"author":"A-R",
+            "ownReplies":[{"characterId":7,"response":"I will join","revision":3,"line":""}],"authorCharacterId":9,"canReply":false}"#).unwrap();
+        assert_eq!(e.own_replies[0].character_id, Some(7));
+        assert_eq!(e.author_character_id, Some(9));
+        assert!(!e.can_reply);
+        // An older server sends none of these: answering stays possible, nobody is the host.
+        let older: GuildEvent = serde_json::from_str(r#"{"scope":"s","id":"i","kind":"rp","title":"T","start":1,"expires":2,"author":"A-R","ownReplies":[{"response":"I will join"}]}"#).unwrap();
+        assert_eq!(older.own_replies[0].character_id, None);
+        assert_eq!(older.author_character_id, None);
+        assert!(older.can_reply);
+        let main: Claim = serde_json::from_str(r#"{"id":1,"name":"Example","status":"verified","method":"officer","createdAt":1,"main":true}"#).unwrap();
+        assert!(main.main);
+    }
+
+    #[test]
+    fn only_the_two_known_answers_are_sent() {
+        let client = Client::new("https://emberlight.example", &"a".repeat(40)).unwrap();
+        assert!(client.answer_event("s", "i", 1, "Maybe").is_err());
     }
 
     #[test]
